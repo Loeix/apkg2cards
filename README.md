@@ -17,7 +17,7 @@ Python 3.9+ requis (Tkinter est inclus avec Python sur Windows et macOS ;
 sous Debian/Ubuntu : `sudo apt install python3-tk`).
 
 ```bash
-git clone https://github.com/<ton-pseudo>/apkg2cards.git
+git clone https://github.com/Loeix/apkg2cards.git
 cd apkg2cards
 python -m venv .venv
 source .venv/bin/activate        # Windows : .venv\Scripts\activate
