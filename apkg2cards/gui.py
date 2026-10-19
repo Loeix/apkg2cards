@@ -7,7 +7,11 @@ import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
+import webbrowser
+
+from . import __version__
 from .core import ApkgError, convert, list_decks
+from .updater import DOWNLOAD_URL, UpdateError, check_for_update
 
 ALL_DECKS = "(tous les paquets)"
 
@@ -42,6 +46,7 @@ class App(ttk.Frame):
         self.font_size = tk.DoubleVar(value=16)
         self.landscape = tk.BooleanVar(value=False)
         self.flip = tk.StringVar(value="long")
+        self.reversed = tk.BooleanVar(value=False)
 
         r = 0
         ttk.Label(self, text="Paquet Anki (.apkg)").grid(row=r, column=0, sticky="w", pady=3)
@@ -81,6 +86,10 @@ class App(ttk.Frame):
         ttk.Combobox(box, textvariable=self.flip, state="readonly", width=8,
                      values=["long", "short"]).grid(row=2, column=3, sticky="w", padx=6)
 
+        ttk.Checkbutton(box, text="Inclure aussi les cartes inversées (doublons recto/verso)",
+                        variable=self.reversed).grid(
+            row=3, column=0, columnspan=4, sticky="w", pady=3)
+
         r += 1
         self.btn = ttk.Button(self, text="Générer le PDF", command=self.start)
         self.btn.grid(row=r, column=0, columnspan=3, sticky="ew", ipady=4)
@@ -103,6 +112,15 @@ class App(ttk.Frame):
             "Impression : recto-verso, retournement sur le bord long (portrait), "
             "échelle 100 %. Fais un test sur une feuille avant le paquet entier."),
         ).grid(row=r + 1, column=0, columnspan=3, sticky="w", pady=(10, 0))
+
+        r += 2
+        ttk.Separator(self).grid(row=r, column=0, columnspan=3, sticky="ew", pady=(12, 6))
+        r += 1
+        ttk.Label(self, foreground="gray", text=f"Version {__version__}").grid(
+            row=r, column=0, columnspan=2, sticky="w")
+        self.upd_btn = ttk.Button(self, text="Rechercher une mise à jour",
+                                  command=self.check_update)
+        self.upd_btn.grid(row=r, column=2, sticky="e")
 
         self.after(100, self.poll)
 
@@ -142,6 +160,7 @@ class App(ttk.Frame):
                 cols=self.cols.get(), rows=self.rows.get(),
                 margin=self.margin.get(), font_size=self.font_size.get(),
                 landscape=self.landscape.get(), flip=self.flip.get(),
+                include_reversed=self.reversed.get(),
                 deck=None if self.deck.get() == ALL_DECKS else self.deck.get())
         except tk.TclError:
             messagebox.showwarning("Valeur invalide", "Vérifie les valeurs numériques.")
@@ -168,6 +187,13 @@ class App(ttk.Frame):
                 msg = self.q.get_nowait()
                 if msg[0] == "p":
                     self.bar.config(maximum=msg[2], value=msg[1])
+                elif msg[0] == "upd":
+                    self.upd_btn.config(state="normal")
+                    self.show_update(msg[1])
+                elif msg[0] == "upd_err":
+                    self.upd_btn.config(state="normal")
+                    self.set_status(msg[1])
+                    messagebox.showinfo("Mise à jour", msg[1])
                 elif msg[0] == "ok":
                     r = msg[1]
                     self.last_pdf = r["output"]
@@ -184,6 +210,35 @@ class App(ttk.Frame):
         except queue.Empty:
             pass
         self.after(100, self.poll)
+
+    # -- mise à jour -------------------------------------------------------
+    def check_update(self):
+        self.upd_btn.config(state="disabled")
+        self.set_status("Recherche de mise à jour…")
+
+        def work():
+            try:
+                self.q.put(("upd", check_for_update()))
+            except UpdateError as e:
+                self.q.put(("upd_err", str(e)))
+            except Exception as e:  # noqa: BLE001
+                self.q.put(("upd_err", f"Erreur inattendue : {e}"))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def show_update(self, info):
+        if not info["available"]:
+            msg = f"apkg2cards est à jour (version {info['current']})."
+            self.set_status(msg)
+            messagebox.showinfo("Mise à jour", msg)
+            return
+        self.set_status(f"Version {info['latest']} disponible.")
+        if messagebox.askyesno(
+                "Mise à jour disponible",
+                f"La version {info['latest']} est disponible (tu as la {info['current']}).\n\n"
+                "Télécharger l'installateur maintenant ? Lance-le ensuite pour mettre à jour "
+                "(ferme d'abord apkg2cards)."):
+            webbrowser.open(DOWNLOAD_URL)
 
     def open_pdf(self):
         if self.last_pdf and os.path.exists(self.last_pdf):

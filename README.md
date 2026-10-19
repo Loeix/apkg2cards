@@ -9,6 +9,8 @@ miroir pour tomber pile derrière leur recto.
 - Texte centré, taille réduite automatiquement si la carte est longue
 - Gère le gras / italique / exposant, les images, les cartes inversées et les cloze
   (trou `[...]` au recto, réponse en bleu gras au verso)
+- Une carte par note : les cartes inversées (« Basique et carte inversée ») ne sont pas
+  imprimées en double, puisqu'une carte physique a déjà deux faces (option pour les inclure)
 - Filtre par paquet
 
 ## Installation
@@ -50,10 +52,36 @@ python -m apkg2cards mon_paquet.apkg --list-decks
 | `--landscape` | page en paysage | non |
 | `--flip long\|short` | retournement choisi à l'impression | `long` |
 | `--deck TEXTE` | ne garder que les paquets contenant ce texte | tous |
+| `--with-reversed` | imprimer aussi les cartes inversées | non |
 | `--list-decks` | liste les paquets et quitte | |
 
 Installation en tant que commande (optionnel) : `pip install .` puis `apkg2cards` /
 `apkg2cards-gui`.
+
+## Application Windows (installateur)
+
+Pas besoin de Python pour l'utiliser.
+
+**[⬇ Télécharger apkg2cards-setup.exe](https://github.com/Loeix/apkg2cards/releases/latest/download/apkg2cards-setup.exe)**
+(toujours la dernière version, voir aussi l'onglet [Releases](https://github.com/Loeix/apkg2cards/releases)).
+
+Lance l'installateur, puis ouvre apkg2cards depuis le menu Démarrer
+(l'installation ne demande pas les droits administrateur).
+
+Pour mettre à jour : bouton **Rechercher une mise à jour** dans l'application, ou retélécharge
+l'installateur et lance-le par-dessus l'ancienne version.
+
+> L'installateur n'est pas signé : Windows peut afficher « Windows a protégé votre PC ».
+> Clique sur **Informations complémentaires → Exécuter quand même**.
+
+**Construire l'installateur soi-même**
+
+- *Automatiquement (GitHub)* : onglet **Releases → Draft a new release**, tag `v0.1.1`
+  (« Create new tag on publish »), **Publish release**. Le workflow `build-windows`
+  (onglet Actions) construit l'installateur et l'ajoute à la release au bout de quelques minutes.
+- *Sur ton PC* : installe [Inno Setup 6](https://jrsoftware.org/isinfo.php), puis double-clique
+  sur `build_windows.bat`. Résultat : `installer\apkg2cards-setup.exe`.
+  Sans Inno Setup, le script produit seulement `dist\apkg2cards\apkg2cards.exe`.
 
 ## Export depuis Anki
 

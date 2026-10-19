@@ -67,9 +67,13 @@ class CoreTests(unittest.TestCase):
     def test_convert_all(self):
         out = os.path.join(self.tmp.name, "o.pdf")
         r = convert(self.apkg, out)
-        self.assertEqual(r["cards"], 4)
+        self.assertEqual(r["cards"], 3)  # la carte inversée de la note 1 est ignorée
         self.assertEqual(r["pages"], 2)
         self.assertTrue(os.path.getsize(out) > 1000)
+
+    def test_include_reversed(self):
+        r = convert(self.apkg, os.path.join(self.tmp.name, "o.pdf"), include_reversed=True)
+        self.assertEqual(r["cards"], 4)
 
     def test_deck_filter(self):
         r = convert(self.apkg, os.path.join(self.tmp.name, "o.pdf"), deck="pénal")
@@ -77,7 +81,7 @@ class CoreTests(unittest.TestCase):
 
     def test_pagination(self):
         r = convert(self.apkg, os.path.join(self.tmp.name, "o.pdf"), cols=1, rows=1)
-        self.assertEqual(r["pages"], 8)
+        self.assertEqual(r["pages"], 6)
 
     def test_unknown_deck_raises(self):
         with self.assertRaises(ApkgError):

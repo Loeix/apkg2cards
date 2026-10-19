@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "apkg2cards"
-version = "0.1.0"
+version = "0.1.1"
 description = "Convertit un paquet Anki (.apkg) en PDF de flashcards à imprimer en recto-verso et à découper"
 readme = "README.md"
 requires-python = ">=3.9"

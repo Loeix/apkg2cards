@@ -306,8 +306,14 @@ def _draw_content(c, items, x, y, w, h, font, media, base_size):
 
 
 def convert(apkg, output=None, cols=2, rows=4, margin=8.0, font_size=16.0,
-            landscape=False, flip="long", deck=None, on_progress=None):
-    """Convertit `apkg` en PDF. Renvoie un dict (output, cards, pages, overflow)."""
+            landscape=False, flip="long", deck=None, include_reversed=False,
+            on_progress=None):
+    """Convertit `apkg` en PDF. Renvoie un dict (output, cards, pages, overflow).
+
+    Une carte physique a deux faces : par défaut, on ne garde qu'une carte par note
+    (hors cloze), ce qui évite les doublons des types « Basique (et carte inversée) ».
+    Mets `include_reversed=True` pour imprimer aussi les cartes inversées.
+    """
     if cols < 1 or rows < 1:
         raise ApkgError("Il faut au moins 1 colonne et 1 ligne.")
     page = A4[::-1] if landscape else A4
@@ -322,6 +328,7 @@ def convert(apkg, output=None, cols=2, rows=4, margin=8.0, font_size=16.0,
         models, decks, notes, rows_db = read_collection(dbpath)
 
         cards = []
+        seen = set()
         for nid, did, odid, ord_ in rows_db:
             deck_name = decks.get(str(odid or did), {}).get("name", "")
             if deck and deck.lower() not in deck_name.lower():
@@ -332,6 +339,10 @@ def convert(apkg, output=None, cols=2, rows=4, margin=8.0, font_size=16.0,
             model = models.get(str(mid))
             if not model:
                 continue
+            if model.get("type") != 1 and not include_reversed:
+                if nid in seen:
+                    continue
+                seen.add(nid)
             sides = build_card_sides(model, flds, ord_)
             if not sides:
                 continue
