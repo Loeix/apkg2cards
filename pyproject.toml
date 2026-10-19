@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "apkg2cards"
+version = "0.1.0"
+description = "Convertit un paquet Anki (.apkg) en PDF de flashcards à imprimer en recto-verso et à découper"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+dependencies = ["reportlab>=4.0", "pillow>=10.0"]
+
+[project.scripts]
+apkg2cards = "apkg2cards.__main__:main"
+
+[project.gui-scripts]
+apkg2cards-gui = "apkg2cards.gui:main"
+
+[tool.setuptools]
+packages = ["apkg2cards"]
