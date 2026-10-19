@@ -74,15 +74,6 @@ l'installateur et lance-le par-dessus l'ancienne version.
 > L'installateur n'est pas signé : Windows peut afficher « Windows a protégé votre PC ».
 > Clique sur **Informations complémentaires → Exécuter quand même**.
 
-**Construire l'installateur soi-même**
-
-- *Automatiquement (GitHub)* : onglet **Releases → Draft a new release**, tag `v0.1.1`
-  (« Create new tag on publish »), **Publish release**. Le workflow `build-windows`
-  (onglet Actions) construit l'installateur et l'ajoute à la release au bout de quelques minutes.
-- *Sur ton PC* : installe [Inno Setup 6](https://jrsoftware.org/isinfo.php), puis double-clique
-  sur `build_windows.bat`. Résultat : `installer\apkg2cards-setup.exe`.
-  Sans Inno Setup, le script produit seulement `dist\apkg2cards\apkg2cards.exe`.
-
 ## Export depuis Anki
 
 Dans Anki : *Fichier → Exporter…* → format **Paquet Anki (`.apkg`)** et coche
