@@ -1,282 +1,584 @@
-"""Interface graphique Tkinter."""
+"""Logique de conversion .apkg -> PDF de cartes recto-verso."""
+import html
+import io
 import json
 import os
-import queue
 import re
-import urllib.error
-import urllib.request
-import webbrowser
-import subprocess
-import sys
+import sqlite3
+import tempfile
 import threading
-import tkinter as tk
-from tkinter import colorchooser, filedialog, messagebox, ttk
+import zipfile
+from html.parser import HTMLParser
+from urllib.parse import unquote
 
-from . import __version__
-from .core import ApkgError, convert, list_decks
-
-ALL_DECKS = "(tous les paquets)"
-PALETTE = ["#2563eb", "#16a34a", "#dc2626", "#ea580c", "#7c3aed", "#db2777", "#0d9488", "#475569"]
-DEFAULT_COLOR = PALETTE[0]
-
-def open_file(path):
-    if sys.platform.startswith("win"):
-        os.startfile(path)  # noqa: S606
-    elif sys.platform == "darwin":
-        subprocess.Popen(["open", path])
-    else:
-        subprocess.Popen(["xdg-open", path])
+from reportlab.lib import colors
+from reportlab.lib.enums import TA_CENTER
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import ParagraphStyle
+from reportlab.lib.units import mm
+from reportlab.lib.utils import ImageReader
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.pdfgen import canvas
+from reportlab.platypus import Image, Paragraph
 
 
-class App(ttk.Frame):
-    def __init__(self, root):
-        super().__init__(root, padding=14)
-        self.root = root
-        self.q = queue.Queue()
-        self.last_pdf = None
-        root.title("apkg2cards — flashcards à imprimer")
-        root.minsize(520, 0)
-        self.grid(sticky="nsew")
-        root.columnconfigure(0, weight=1)
-        self.columnconfigure(1, weight=1)
+class ApkgError(Exception):
+    """Erreur lisible par l'utilisateur (fichier invalide, format non géré...)."""
 
-        self.apkg = tk.StringVar()
-        self.out = tk.StringVar()
-        self.deck = tk.StringVar(value=ALL_DECKS)
-        self.cols = tk.IntVar(value=2)
-        self.rows = tk.IntVar(value=4)
-        self.margin = tk.DoubleVar(value=8)
-        self.font_size = tk.DoubleVar(value=16)
-        self.landscape = tk.BooleanVar(value=False)
-        self.flip = tk.StringVar(value="long")
-        self.reversed = tk.BooleanVar(value=False)
-        self.color = tk.StringVar(value=DEFAULT_COLOR)
-        
 
-        r = 0
-        ttk.Label(self, text="Paquet Anki (.apkg)").grid(row=r, column=0, sticky="w", pady=3)
-        ttk.Entry(self, textvariable=self.apkg).grid(row=r, column=1, sticky="ew", padx=6)
-        ttk.Button(self, text="Parcourir…", command=self.pick_apkg).grid(row=r, column=2)
+# --------------------------------------------------------------------------
+# Couleurs
+# --------------------------------------------------------------------------
+DEFAULT_COLOR = "#2563eb"
+TEXT_COLOR = colors.HexColor("#1f2937")
 
-        r += 1
-        ttk.Label(self, text="PDF de sortie").grid(row=r, column=0, sticky="w", pady=3)
-        ttk.Entry(self, textvariable=self.out).grid(row=r, column=1, sticky="ew", padx=6)
-        ttk.Button(self, text="Choisir…", command=self.pick_out).grid(row=r, column=2)
 
-        r += 1
-        ttk.Label(self, text="Paquet").grid(row=r, column=0, sticky="w", pady=3)
-        self.deck_box = ttk.Combobox(self, textvariable=self.deck, state="readonly",
-                                     values=[ALL_DECKS])
-        self.deck_box.grid(row=r, column=1, columnspan=2, sticky="ew", padx=6)
+def parse_color(value):
+    try:
+        return colors.toColor(value)
+    except Exception:
+        raise ApkgError(f"Couleur invalide : {value!r} (exemple : #2563eb)")
 
-        r += 1
-        box = ttk.LabelFrame(self, text="Mise en page", padding=10)
-        box.grid(row=r, column=0, columnspan=3, sticky="ew", pady=10)
-        for i in range(4):
-            box.columnconfigure(i, weight=1)
 
-        def spin(label, var, lo, hi, row, col, step=1):
-            ttk.Label(box, text=label).grid(row=row, column=col, sticky="w", pady=3)
-            ttk.Spinbox(box, from_=lo, to=hi, increment=step, textvariable=var,
-                        width=6).grid(row=row, column=col + 1, sticky="w", padx=6)
+def _luminance(c):
+    return 0.299 * c.red + 0.587 * c.green + 0.114 * c.blue
 
-        spin("Colonnes", self.cols, 1, 6, 0, 0)
-        spin("Lignes", self.rows, 1, 8, 0, 2)
-        spin("Marge (mm)", self.margin, 0, 30, 1, 0, 1)
-        spin("Taille texte max", self.font_size, 6, 40, 1, 2, 1)
 
-        ttk.Checkbutton(box, text="Page en paysage", variable=self.landscape).grid(
-            row=2, column=0, columnspan=2, sticky="w", pady=3)
-        ttk.Label(box, text="Retournement").grid(row=2, column=2, sticky="w")
-        ttk.Combobox(box, textvariable=self.flip, state="readonly", width=8,
-                     values=["long", "short"]).grid(row=2, column=3, sticky="w", padx=6)
+def _mix(c, other, t):
+    return colors.Color(c.red * (1 - t) + other.red * t,
+                        c.green * (1 - t) + other.green * t,
+                        c.blue * (1 - t) + other.blue * t)
 
-        ttk.Checkbutton(box, text="Inclure aussi les cartes inversées (doublons recto/verso)",
-                        variable=self.reversed).grid(
-            row=3, column=0, columnspan=4, sticky="w", pady=3)
 
-        ttk.Label(box, text="Couleur des cartes").grid(row=4, column=0, sticky="w", pady=(6, 3))
-        swatches = ttk.Frame(box)
-        swatches.grid(row=4, column=1, columnspan=3, sticky="w", pady=(6, 3))
-        for hexa in PALETTE:
-            sw = tk.Label(swatches, bg=hexa, width=3, relief="ridge", cursor="hand2")
-            sw.pack(side="left", padx=2)
-            sw.bind("<Button-1>", lambda e, h=hexa: self.set_color(h))
-        ttk.Button(swatches, text="Autre…", command=self.pick_color).pack(side="left", padx=(8, 2))
-        self.preview = tk.Label(swatches, width=6, relief="sunken", bg=self.color.get())
-        self.preview.pack(side="left", padx=4)
+def _hex(c):
+    return "#%02x%02x%02x" % (round(c.red * 255), round(c.green * 255), round(c.blue * 255))
 
-        r += 1
-        self.btn = ttk.Button(self, text="Générer le PDF", command=self.start)
-        self.btn.grid(row=r, column=0, columnspan=3, sticky="ew", ipady=4)
 
-        r += 1
-        self.bar = ttk.Progressbar(self, mode="determinate")
-        self.bar.grid(row=r, column=0, columnspan=3, sticky="ew", pady=(10, 2))
+def make_theme(color):
+    main = parse_color(color)
+    lum = _luminance(main)
+    return {
+        "main": main,
+        "tint": _mix(main, colors.white, 0.90),          # fond du verso
+        "on": colors.white if lum < 0.65 else TEXT_COLOR,  # texte du bandeau
+        # couleur du texte des trous (cloze), assez foncée pour rester lisible
+        "accent": _hex(_mix(main, colors.black, 0.15 if lum <= 0.6 else 0.5)),
+    }
 
-        r += 1
-        self.status = ttk.Label(self, text="Choisis un fichier .apkg pour commencer.",
-                                wraplength=480)
-        self.status.grid(row=r, column=0, columnspan=3, sticky="w")
 
-        r += 1
-        self.open_btn = ttk.Button(self, text="Ouvrir le PDF", command=self.open_pdf,
-                                   state="disabled")
-        self.open_btn.grid(row=r, column=0, columnspan=3, sticky="ew", pady=(8, 0))
+# --------------------------------------------------------------------------
+# Polices (accents, symboles ; DejaVu / Arial, sinon Helvetica)
+# --------------------------------------------------------------------------
+FONT_SETS = [
+    ("DejaVu", [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-BoldOblique.ttf"]),
+    ("ArialW", [
+        r"C:\Windows\Fonts\arial.ttf", r"C:\Windows\Fonts\arialbd.ttf",
+        r"C:\Windows\Fonts\ariali.ttf", r"C:\Windows\Fonts\arialbi.ttf"]),
+    ("ArialM", [
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+        "/System/Library/Fonts/Supplemental/Arial Italic.ttf",
+        "/System/Library/Fonts/Supplemental/Arial Bold Italic.ttf"]),
+]
 
-        r += 1
-        ttk.Separator(self).grid(row=r, column=0, columnspan=3, sticky="ew", pady=(12, 6))
-        r += 1
-        ttk.Label(self, text=f"Version {__version__}", foreground="gray").grid(
-            row=r, column=0, sticky="w")
-        ttk.Button(self, text="Rechercher une mise à jour", command=self.check_update).grid(
-            row=r, column=1, columnspan=2, sticky="e")
 
-        ttk.Label(self, foreground="gray", wraplength=480, text=(
-            "Impression : recto-verso, retournement sur le bord long (portrait), "
-            "échelle 100 %. Fais un test sur une feuille avant le paquet entier."),
-        ).grid(row=r + 1, column=0, columnspan=3, sticky="w", pady=(6, 0))
-
-        self.after(100, self.poll)
-
-    # -- sélection de fichiers -------------------------------------------
-    def pick_apkg(self):
-        p = filedialog.askopenfilename(title="Choisir un paquet Anki",
-                                       filetypes=[("Paquet Anki", "*.apkg"), ("Tous", "*.*")])
-        if not p:
-            return
-        self.apkg.set(p)
-        self.out.set(os.path.splitext(p)[0] + "_cartes.pdf")
-        try:
-            self.deck_box["values"] = [ALL_DECKS] + list_decks(p)
-            self.deck.set(ALL_DECKS)
-            self.set_status("Fichier chargé.")
-        except ApkgError as e:
-            self.set_status(f"Erreur : {e}")
-            messagebox.showerror("Fichier invalide", str(e))
-
-    def set_color(self, hexa):
-        self.color.set(hexa)
-        self.preview.config(bg=hexa)
-
-    def pick_color(self):
-        _, hexa = colorchooser.askcolor(color=self.color.get(), title="Couleur des cartes")
-        if hexa:
-            self.set_color(hexa)
-
-    def pick_out(self):
-        p = filedialog.asksaveasfilename(title="Enregistrer le PDF", defaultextension=".pdf",
-                                         filetypes=[("PDF", "*.pdf")])
-        if p:
-            self.out.set(p)
-
-    def set_status(self, text):
-        self.status.config(text=text)
-
-    # -- conversion en tâche de fond -------------------------------------
-    def start(self):
-        if not self.apkg.get():
-            messagebox.showwarning("Fichier manquant", "Choisis d'abord un fichier .apkg.")
-            return
-        try:
-            args = dict(
-                apkg=self.apkg.get(), output=self.out.get() or None,
-                cols=self.cols.get(), rows=self.rows.get(),
-                margin=self.margin.get(), font_size=self.font_size.get(),
-                landscape=self.landscape.get(), flip=self.flip.get(),
-                include_reversed=self.reversed.get(),
-                color=self.color.get(),
-                deck=None if self.deck.get() == ALL_DECKS else self.deck.get())
-        except tk.TclError:
-            messagebox.showwarning("Valeur invalide", "Vérifie les valeurs numériques.")
-            return
-        self.btn.config(state="disabled")
-        self.open_btn.config(state="disabled")
-        self.bar.config(value=0)
-        self.set_status("Conversion en cours…")
-
-        def work():
+def setup_font():
+    for name, paths in FONT_SETS:
+        if all(os.path.exists(p) for p in paths):
             try:
-                res = convert(**args, on_progress=lambda d, t: self.q.put(("p", d, t)))
-                self.q.put(("ok", res))
-            except ApkgError as e:
-                self.q.put(("err", str(e)))
-            except Exception as e:  # noqa: BLE001
-                self.q.put(("err", f"Erreur inattendue : {e}"))
+                for tag, p in zip(("", "-B", "-I", "-BI"), paths):
+                    pdfmetrics.registerFont(TTFont(name + tag, p))
+                pdfmetrics.registerFontFamily(
+                    name, normal=name, bold=name + "-B",
+                    italic=name + "-I", boldItalic=name + "-BI")
+                return name
+            except Exception:
+                continue
+    return "Helvetica"
 
-        threading.Thread(target=work, daemon=True).start()
 
-    def check_update(self):
-        """Cherche une nouvelle version sur GitHub."""
-        self.set_status("Recherche de mise à jour…")
+# --------------------------------------------------------------------------
+# Lecture du .apkg
+# --------------------------------------------------------------------------
+def _read_collection(dbpath):
+    con = sqlite3.connect(dbpath)
+    try:
+        models_json, decks_json = con.execute("select models, decks from col").fetchone()
+        notes = {nid: (mid, flds.split("\x1f"))
+                 for nid, mid, flds in con.execute("select id, mid, flds from notes")}
+        rows = con.execute(
+            "select nid, did, odid, ord from cards order by did, nid, ord").fetchall()
+    except sqlite3.Error as e:
+        raise ApkgError(f"Collection Anki illisible : {e}")
+    finally:
+        con.close()
+    return json.loads(models_json), json.loads(decks_json), notes, rows
 
-        def parse(v):
-            return tuple(int(x) for x in re.findall(r"\d+", v)[:3])
 
-        def work():
-            link = None
-            try:
-                req = urllib.request.Request(
-                    "https://api.github.com/repos/Loeix/apkg2cards/releases/latest",
-                    headers={"User-Agent": "apkg2cards", "Accept": "application/vnd.github+json"})
-                with urllib.request.urlopen(req, timeout=10) as r:
-                    data = json.loads(r.read().decode("utf-8"))
-                latest = data.get("tag_name", "")
-                if parse(latest) > parse(__version__):
-                    link = data.get("html_url")
-                    msg = (f"Nouvelle version disponible : {latest}\n"
-                           f"Version installée : v{__version__}")
-                else:
-                    msg = f"Tu as la dernière version (v{__version__})."
-            except urllib.error.HTTPError as e:
-                msg = ("Aucune version publiée sur GitHub pour le moment."
-                       if e.code == 404 else f"Erreur GitHub (code {e.code}).")
-            except Exception as e:  # noqa: BLE001
-                msg = f"Impossible de vérifier les mises à jour.\n\nDétail : {e}"
-            self.q.put(("update", msg, link))
+class LazyMedia:
+    """Médias du .apkg, extraits seulement quand une carte en a besoin."""
 
-        threading.Thread(target=work, daemon=True).start()
+    def __init__(self, zf, mapping, tmpdir):
+        names = set(zf.namelist())
+        self._zf, self._tmp = zf, tmpdir
+        self._num = {fname: num for num, fname in mapping.items() if num in names}
+        self._done = {}
+        self._lock = threading.Lock()
 
-    def poll(self):
+    def get(self, name, default=None):
+        num = self._num.get(name)
+        if num is None:
+            return default
+        with self._lock:
+            if name not in self._done:
+                self._done[name] = self._zf.extract(num, self._tmp)
+            return self._done[name]
+
+
+class Collection:
+    """Un .apkg ouvert : paquets, notes et cartes. À fermer avec close() (ou `with`)."""
+
+    def __init__(self, apkg):
+        self.path = apkg
+        self._tmp = tempfile.TemporaryDirectory()
+        self._zf = None
         try:
-            while True:
-                msg = self.q.get_nowait()
-                if msg[0] == "p":
-                    self.bar.config(maximum=msg[2], value=msg[1])
-                elif msg[0] == "ok":
-                    r = msg[1]
-                    self.last_pdf = r["output"]
-                    txt = f"{r['cards']} cartes → {r['pages']} pages (recto-verso)."
-                    if r["overflow"]:
-                        txt += f" {r['overflow']} face(s) très longue(s) : texte fortement réduit."
-                    self.set_status(txt)
-                    self.btn.config(state="normal")
-                    self.open_btn.config(state="normal")
-                elif msg[0] == "update":
-                    self.set_status(msg[1].split("\n")[0])
-                    if msg[2]:
-                        if messagebox.askyesno("Mise à jour", msg[1] + "\n\nOuvrir la page de téléchargement ?"):
-                            webbrowser.open(msg[2])
-                    else:
-                        messagebox.showinfo("Mise à jour", msg[1])
-                else:
-                    self.set_status(f"Erreur : {msg[1]}")
-                    self.btn.config(state="normal")
-                    messagebox.showerror("Échec", msg[1])
-        except queue.Empty:
+            self._open(apkg)
+        except Exception:
+            self.close()
+            raise
+
+    def _open(self, apkg):
+        try:
+            self._zf = zipfile.ZipFile(apkg)
+        except (zipfile.BadZipFile, OSError) as e:
+            raise ApkgError(f"Impossible d'ouvrir le fichier : {e}")
+        names = self._zf.namelist()
+        if "collection.anki21" in names:
+            dbname = "collection.anki21"
+        elif "collection.anki2" in names and "collection.anki21b" not in names:
+            dbname = "collection.anki2"
+        elif "collection.anki21b" in names:
+            raise ApkgError(
+                "Ce .apkg est au format récent. Ré-exporte-le depuis Anki en cochant "
+                "« Prendre en charge les anciennes versions d'Anki ».")
+        else:
+            raise ApkgError("Fichier .apkg invalide (aucune collection trouvée).")
+        self._zf.extract(dbname, self._tmp.name)
+        mapping = {}
+        if "media" in names:
+            try:
+                mapping = json.loads(self._zf.read("media").decode("utf-8"))
+            except Exception:
+                mapping = {}
+        self.media = LazyMedia(self._zf, mapping, self._tmp.name)
+        self.models, self.decks, self.notes, self._rows = _read_collection(
+            os.path.join(self._tmp.name, dbname))
+
+    def deck_names(self):
+        return sorted(d["name"] for d in self.decks.values())
+
+    def cards(self, deck=None, include_reversed=False, accent="#1a5fb4", limit=None):
+        """Liste de (items_recto, items_verso, nom_du_paquet)."""
+        out, seen = [], set()
+        for nid, did, odid, ord_ in self._rows:
+            deck_name = self.decks.get(str(odid or did), {}).get("name", "")
+            if deck and deck.lower() not in deck_name.lower():
+                continue
+            if nid not in self.notes:
+                continue
+            mid, flds = self.notes[nid]
+            model = self.models.get(str(mid))
+            if not model:
+                continue
+            if model.get("type") != 1 and not include_reversed:
+                if nid in seen:
+                    continue
+                seen.add(nid)
+            sides = build_card_sides(model, flds, ord_)
+            if not sides:
+                continue
+            fi, bi = to_items(sides[0], accent), to_items(sides[1], accent)
+            if fi or bi:
+                out.append((fi, bi, deck_name.split("::")[-1]))
+                if limit and len(out) >= limit:
+                    break
+        return out
+
+    def close(self):
+        if self._zf is not None:
+            try:
+                self._zf.close()
+            except Exception:
+                pass
+            self._zf = None
+        try:
+            self._tmp.cleanup()
+        except Exception:
             pass
-        self.after(100, self.poll)
 
-    def open_pdf(self):
-        if self.last_pdf and os.path.exists(self.last_pdf):
-            open_file(self.last_pdf)
+    def __enter__(self):
+        return self
 
-
-def main():
-    root = tk.Tk()
-    App(root)
-    root.mainloop()
+    def __exit__(self, *exc):
+        self.close()
+        return False
 
 
-if __name__ == "__main__":
-    main()
+def list_decks(apkg):
+    """Noms des paquets contenus dans le .apkg."""
+    with Collection(apkg) as col:
+        return col.deck_names()
+
+
+# --------------------------------------------------------------------------
+# Rendu des templates Anki
+# --------------------------------------------------------------------------
+CLOZE_RE = re.compile(r"\{\{c(\d+)::(.*?)(?:::(.*?))?\}\}", re.S)
+HR_RE = re.compile(r"<hr\s+id=[\"']?answer[\"']?\s*/?>", re.I)
+
+
+def apply_cloze(text, n, reveal):
+    def repl(m):
+        if int(m.group(1)) == n:
+            if reveal:
+                return f"<cl>{m.group(2)}</cl>"
+            return f"<cl>[{m.group(3) or '...'}]</cl>"
+        return m.group(2)
+    return CLOZE_RE.sub(repl, text)
+
+
+def plain(s):
+    return html.unescape(re.sub(r"<[^>]+>", "", s))
+
+
+def render(tmpl, fields, front_side="", cloze_n=None, reveal=False):
+    def cond(m):
+        neg, name, inner = m.group(1) == "^", m.group(2).strip(), m.group(3)
+        has = bool(plain(fields.get(name, "")).strip())
+        return inner if has != neg else ""
+
+    prev = None
+    while prev != tmpl:
+        prev = tmpl
+        tmpl = re.sub(r"\{\{([#^])([^}]+)\}\}(.*?)\{\{/\2\}\}", cond, tmpl, flags=re.S)
+
+    def sub(m):
+        name = m.group(1).strip()
+        if name == "FrontSide":
+            return front_side
+        parts = name.split(":")
+        field, filters = parts[-1], parts[:-1]
+        if "type" in filters or "hint" in filters:
+            return ""
+        value = fields.get(field, "")
+        if "cloze" in filters:
+            return apply_cloze(value, cloze_n or 1, reveal)
+        if "text" in filters:
+            return plain(value)
+        return value
+
+    return re.sub(r"\{\{([^}]+)\}\}", sub, tmpl)
+
+
+def build_card_sides(model, flds, ord_):
+    names = [f["name"] for f in sorted(model["flds"], key=lambda f: f["ord"])]
+    fields = {n: (flds[i] if i < len(flds) else "") for i, n in enumerate(names)}
+    is_cloze = model.get("type") == 1
+    tmpls = model["tmpls"]
+    t = tmpls[0] if is_cloze else (tmpls[ord_] if ord_ < len(tmpls) else None)
+    if t is None:
+        return None
+    n = ord_ + 1 if is_cloze else None
+    front = render(t["qfmt"], fields, cloze_n=n, reveal=False)
+    back = render(t["afmt"], fields, front_side="@@FS@@", cloze_n=n, reveal=True)
+    m = HR_RE.search(back)
+    back = back[m.end():] if m else back.replace("@@FS@@", "")
+    return front, back
+
+
+# --------------------------------------------------------------------------
+# HTML Anki -> blocs (paragraphes ReportLab / images)
+# --------------------------------------------------------------------------
+TAGMAP = {
+    "b": ["b"], "strong": ["b"], "i": ["i"], "em": ["i"], "u": ["u"],
+    "sup": ["super"], "sub": ["sub"],
+    "cl": ["b", 'font color="ACCENT"'],
+}
+BLOCK = {"div", "p", "li", "tr", "ul", "ol", "table",
+         "h1", "h2", "h3", "h4", "h5", "h6"}
+
+
+class _Conv(HTMLParser):
+    def __init__(self, accent="#1a5fb4"):
+        super().__init__(convert_charrefs=True)
+        self.accent = accent
+        self.items, self.buf = [], []
+        self.stack, self.stack_start = [], []
+        self.skip = 0
+
+    def flush(self):
+        body = "".join(self.buf)
+        body = re.sub(r"^(\s|<br/>)+|(\s|<br/>)+$", "", body)
+        if re.sub(r"<[^>]+>", "", body).strip():
+            pre = "".join(f"<{t}>" for t in self.stack_start)
+            post = "".join(f"</{t.split()[0]}>" for t in reversed(self.stack))
+            self.items.append(("p", pre + body + post))
+        self.buf = []
+        self.stack_start = list(self.stack)
+
+    def _opens(self, tag):
+        return [t.replace("ACCENT", self.accent) for t in TAGMAP[tag]]
+
+    def handle_starttag(self, tag, attrs):
+        if tag in ("style", "script"):
+            self.skip += 1
+        elif tag == "br":
+            self.buf.append("<br/>")
+        elif tag == "img":
+            src = dict(attrs).get("src")
+            if src:
+                self.flush()
+                self.items.append(("img", unquote(src)))
+        elif tag in TAGMAP:
+            for t in self._opens(tag):
+                self.buf.append(f"<{t}>")
+                self.stack.append(t)
+        elif tag in BLOCK:
+            self.flush()
+            if tag == "li":
+                self.buf.append("• ")
+
+    def handle_endtag(self, tag):
+        if tag in ("style", "script"):
+            self.skip = max(0, self.skip - 1)
+        elif tag in TAGMAP:
+            for t in reversed(self._opens(tag)):
+                if self.stack and self.stack[-1] == t:
+                    self.stack.pop()
+                    self.buf.append(f"</{t.split()[0]}>")
+        elif tag in BLOCK:
+            self.flush()
+
+    def handle_data(self, data):
+        if not self.skip:
+            self.buf.append(html.escape(data.replace("\n", " "), quote=False))
+
+
+def to_items(raw, accent="#1a5fb4"):
+    raw = re.sub(r"\[sound:[^\]]*\]", "", raw)
+    c = _Conv(accent)
+    c.feed(raw)
+    c.flush()
+    return c.items
+
+
+# --------------------------------------------------------------------------
+# Dessin
+# --------------------------------------------------------------------------
+def _make_flowables(items, size, aw, ah, font, media, scale):
+    style = ParagraphStyle("c", fontName=font, fontSize=size, leading=size * 1.25,
+                           alignment=TA_CENTER, textColor=TEXT_COLOR)
+    flows = []
+    for kind, val in items:
+        if kind == "p":
+            try:
+                flows.append(Paragraph(val, style))
+            except Exception:
+                flows.append(Paragraph(html.escape(plain(val)), style))
+        else:
+            path = media.get(os.path.basename(val))
+            if not path:
+                continue
+            try:
+                iw, ih = ImageReader(path).getSize()
+                r = min(aw / iw, ah * 0.7 * scale / ih, 1.5)
+                flows.append(Image(path, iw * r, ih * r))
+            except Exception:
+                flows.append(Paragraph("[image]", style))
+    return flows
+
+
+def _draw_content(c, items, x, y, w, h, font, media, base_size):
+    """Dessine le contenu centré ; renvoie True si ça déborde même réduit."""
+    pad = 4 * mm
+    aw, ah = w - 2 * pad, h - 2 * pad
+    gap = 3
+    scale = 1.0
+    while True:
+        size = max(5, base_size * scale)
+        flows = _make_flowables(items, size, aw, ah, font, media, scale)
+        heights = [f.wrapOn(c, aw, 10 ** 6)[1] for f in flows]
+        total = sum(heights) + gap * max(0, len(flows) - 1)
+        if total <= ah or scale <= 0.3:
+            break
+        scale -= 0.05
+    cur = y + pad + ah - max(0, (ah - total) / 2)
+    for f, hgt in zip(flows, heights):
+        cur -= hgt
+        if isinstance(f, Image):
+            f.drawOn(c, x + pad + (aw - f.drawWidth) / 2, cur)
+        else:
+            f.drawOn(c, x + pad, cur)
+        cur -= gap
+    return total > ah
+
+
+def _draw_card(c, x, y, w, h, items, side, deck, font, media, base_size, theme):
+    """Carte arrondie avec bandeau coloré (QUESTION / RÉPONSE + nom du paquet)."""
+    r, band, main = 3.5 * mm, 8 * mm, theme["main"]
+    bold = "Helvetica-Bold" if font == "Helvetica" else font + "-B"
+
+    # fond (blanc au recto, teinté au verso) + bandeau, découpés aux coins arrondis
+    c.saveState()
+    path = c.beginPath()
+    path.roundRect(x, y, w, h, r)
+    c.clipPath(path, stroke=0, fill=0)
+    c.setFillColor(colors.white if side == 0 else theme["tint"])
+    c.rect(x, y, w, h, stroke=0, fill=1)
+    c.setFillColor(main)
+    c.rect(x, y + h - band, w, band, stroke=0, fill=1)
+    c.restoreState()
+
+    # contour : sert aussi de guide de découpe
+    c.saveState()
+    c.setStrokeColor(main)
+    c.setLineWidth(1.2)
+    c.roundRect(x, y, w, h, r, stroke=1, fill=0)
+    c.restoreState()
+
+    # libellés du bandeau
+    label = "QUESTION" if side == 0 else "RÉPONSE"
+    ty = y + h - band / 2 - 2.7
+    c.setFillColor(theme["on"])
+    c.setFont(bold, 7.5)
+    c.drawString(x + 4 * mm, ty, label)
+    maxw = w - 12 * mm - c.stringWidth(label, bold, 7.5)
+    name = deck
+    if c.stringWidth(name, font, 7) > maxw:
+        while name and c.stringWidth(name + "…", font, 7) > maxw:
+            name = name[:-1]
+        name = name + "…" if name else ""
+    c.setFont(font, 7)
+    c.drawRightString(x + w - 4 * mm, ty, name)
+
+    return _draw_content(c, items, x, y, w, h - band, font, media, base_size)
+
+
+GAP = 1.5 * mm  # espace entre cartes : la découpe n'a pas à être parfaite
+
+
+def _geometry(cols, rows, margin, landscape):
+    if cols < 1 or rows < 1:
+        raise ApkgError("Il faut au moins 1 colonne et 1 ligne.")
+    page = A4[::-1] if landscape else A4
+    W, H = page
+    m = margin * mm
+    cw, ch = (W - 2 * m) / cols, (H - 2 * m) / rows
+    if cw < 25 * mm or ch < 20 * mm:
+        raise ApkgError("Cartes trop petites : réduis le nombre de colonnes/lignes.")
+    return page, m, cw, ch
+
+
+def convert(apkg, output=None, cols=2, rows=4, margin=8.0, font_size=16.0,
+            landscape=False, flip="long", deck=None, include_reversed=False,
+            color=DEFAULT_COLOR, on_progress=None):
+    """Convertit `apkg` en PDF. Renvoie un dict (output, cards, pages, overflow).
+
+    Une carte physique a deux faces : par défaut, on ne garde qu'une carte par note
+    (hors cloze), ce qui évite les doublons des types « Basique (et carte inversée) ».
+    Mets `include_reversed=True` pour imprimer aussi les cartes inversées.
+    """
+    theme = make_theme(color)
+    page, m, cw, ch = _geometry(cols, rows, margin, landscape)
+    W, H = page
+
+    with Collection(apkg) as col:
+        cards = col.cards(deck, include_reversed, theme["accent"])
+        if not cards:
+            raise ApkgError("Aucune carte trouvée (vérifie le filtre de paquet).")
+
+        font = setup_font()
+        out = output or os.path.splitext(apkg)[0] + "_cartes.pdf"
+        c = canvas.Canvas(out, pagesize=page)
+        c.setTitle("Flashcards")
+
+        # Au verso, on miroite l'axe autour duquel la feuille est retournée.
+        long_edge_is_vertical = not landscape
+        mirror_cols = (flip == "long") == long_edge_is_vertical
+
+        per = cols * rows
+        overflow = 0
+        for start in range(0, len(cards), per):
+            chunk = cards[start:start + per]
+            for side in (0, 1):
+                for i, card in enumerate(chunk):
+                    col_i, row_i = i % cols, i // cols
+                    if side == 1:
+                        if mirror_cols:
+                            col_i = cols - 1 - col_i
+                        else:
+                            row_i = rows - 1 - row_i
+                    x = m + col_i * cw + GAP
+                    y = H - m - (row_i + 1) * ch + GAP
+                    if _draw_card(c, x, y, cw - 2 * GAP, ch - 2 * GAP, card[side], side,
+                                  card[2], font, col.media, font_size, theme):
+                        overflow += 1
+                c.showPage()
+            if on_progress:
+                on_progress(min(start + per, len(cards)), len(cards))
+        c.save()
+
+    return {"output": out, "cards": len(cards),
+            "pages": -(-len(cards) // per) * 2, "overflow": overflow}
+
+
+# --------------------------------------------------------------------------
+# Aperçu d'une carte (PDF de 2 pages : recto, verso) pour l'interface
+# --------------------------------------------------------------------------
+_SAMPLE_FRONT = "Le délai de prescription de droit commun est de <cl>[...]</cl>."
+_SAMPLE_BACK = ("Le délai de prescription de droit commun est de <cl>cinq ans</cl>."
+                "<br>Art. 2224 C. civ.")
+
+
+def render_preview(col=None, deck=None, include_reversed=False, color=DEFAULT_COLOR,
+                   cols=2, rows=4, margin=8.0, font_size=16.0, landscape=False,
+                   background="#ffffff"):
+    """Dessine une carte (recto + verso) à la taille réelle de la grille choisie.
+
+    Utilise la première carte de `col` si fourni, sinon une carte d'exemple.
+    Renvoie {"pdf": bytes, "size_pt": (w, h), "card_mm": (w, h), "sample": bool}.
+    """
+    theme = make_theme(color)
+    _, _, cw, ch = _geometry(cols, rows, margin, landscape)
+    w, h = cw - 2 * GAP, ch - 2 * GAP
+
+    card, media = None, {}
+    if col is not None:
+        found = col.cards(deck, include_reversed, theme["accent"], limit=1)
+        if found:
+            card, media = found[0], col.media
+    sample = card is None
+    if sample:
+        card = (to_items(_SAMPLE_FRONT, theme["accent"]),
+                to_items(_SAMPLE_BACK, theme["accent"]), "Droit civil")
+
+    pad = 4 * mm
+    pw, ph = w + 2 * pad, h + 2 * pad
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=(pw, ph))
+    font = setup_font()
+    bg = parse_color(background)
+    for side in (0, 1):
+        c.setFillColor(bg)
+        c.rect(0, 0, pw, ph, stroke=0, fill=1)
+        _draw_card(c, pad, pad, w, h, card[side], side, card[2], font, media, font_size, theme)
+        c.showPage()
+    c.save()
+    return {"pdf": buf.getvalue(), "size_pt": (pw, ph),
+            "card_mm": (w / mm, h / mm), "sample": sample}
