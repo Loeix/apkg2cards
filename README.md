@@ -69,8 +69,9 @@ Pas besoin de Python pour l'utiliser : télécharge `apkg2cards-setup.exe` dans 
 
 **Construire l'installateur soi-même**
 
-- *Automatiquement (GitHub)* : onglet **Releases → Draft a new release**, tag `v0.1.0`
-  (« Create new tag on publish »), **Publish release**. Le workflow `build-windows`
+- *Automatiquement (GitHub)* : onglet **Releases → Draft a new release**, tag `v` suivi du numéro de
+  `__version__` (ex. `v0.1.2`, « Create new tag on publish »). puis **Publish release**. Le tag doit correspondre à la
+  version du code, sinon le workflow s'arrête. Le workflow `build-windows`
   (onglet Actions) construit l'installateur et l'ajoute à la release au bout de quelques minutes.
 - *Sur ton PC* : installe [Inno Setup 6](https://jrsoftware.org/isinfo.php), puis double-clique
   sur `build_windows.bat`. Résultat : `installer\apkg2cards-setup.exe`.

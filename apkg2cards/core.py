@@ -26,7 +26,7 @@ class ApkgError(Exception):
 
 
 # --------------------------------------------------------------------------
-# Polices (accents, symboles ; DejaVu / Arial, sinon Helvetica)python -m apkg2cards
+# Polices (accents, symboles ; DejaVu / Arial, sinon Helvetica)
 # --------------------------------------------------------------------------
 FONT_SETS = [
     ("DejaVu", [

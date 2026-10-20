@@ -1,6 +1,8 @@
 ; Script Inno Setup — crée apkg2cards-setup.exe à partir du dossier dist\apkg2cards
 #define MyAppName "apkg2cards"
-#define MyAppVersion "0.1.2"
+#ifndef MyAppVersion
+  #define MyAppVersion "0.0.0"
+#endif
 #define MyAppExe "apkg2cards.exe"
 
 [Setup]

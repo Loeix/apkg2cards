@@ -11,7 +11,8 @@ python -m PyInstaller --noconfirm --clean --windowed --name apkg2cards ^
 
 set ISCC="%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe"
 if exist %ISCC% (
-  %ISCC% packaging\installer.iss || goto :err
+  for /f %%v in ('python packaging\get_version.py') do set VERSION=%%v
+  %ISCC% /DMyAppVersion=%VERSION% packaging\installer.iss || goto :err
   echo.
   echo Installateur : installer\apkg2cards-setup.exe
 ) else (
