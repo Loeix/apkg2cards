@@ -2,4 +2,4 @@
 from .core import ApkgError, convert, list_decks
 
 __all__ = ["ApkgError", "convert", "list_decks"]
-__version__ = "0.2.0"
+__version__ = "0.3.1-beta"

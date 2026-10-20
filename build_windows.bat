@@ -7,7 +7,7 @@ cd /d "%~dp0"
 python -m pip install -r requirements.txt pyinstaller || goto :err
 
 python -m PyInstaller --noconfirm --clean --windowed --name apkg2cards ^
-  --icon assets\icon.ico --collect-submodules apkg2cards run_gui.py || goto :err
+  --icon assets\icon.ico --exclude-module tkinter --collect-submodules apkg2cards run_gui.py || goto :err
 
 set ISCC="%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe"
 if exist %ISCC% (

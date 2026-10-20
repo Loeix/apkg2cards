@@ -1,10 +1,12 @@
 """Logique de conversion .apkg -> PDF de cartes recto-verso."""
 import html
+import io
 import json
 import os
 import re
 import sqlite3
 import tempfile
+import threading
 import zipfile
 from html.parser import HTMLParser
 from urllib.parse import unquote
@@ -103,37 +105,7 @@ def setup_font():
 # --------------------------------------------------------------------------
 # Lecture du .apkg
 # --------------------------------------------------------------------------
-def load_apkg(path, tmp):
-    try:
-        z = zipfile.ZipFile(path)
-    except (zipfile.BadZipFile, FileNotFoundError, IsADirectoryError) as e:
-        raise ApkgError(f"Impossible d'ouvrir le fichier : {e}")
-    with z:
-        names = z.namelist()
-        if "collection.anki21" in names:
-            dbname = "collection.anki21"
-        elif "collection.anki2" in names and "collection.anki21b" not in names:
-            dbname = "collection.anki2"
-        elif "collection.anki21b" in names:
-            raise ApkgError(
-                "Ce .apkg est au format récent. Ré-exporte-le depuis Anki en cochant "
-                "« Prendre en charge les anciennes versions d'Anki ».")
-        else:
-            raise ApkgError("Fichier .apkg invalide (aucune collection trouvée).")
-        z.extract(dbname, tmp)
-        media = {}
-        if "media" in names:
-            try:
-                mapping = json.loads(z.read("media").decode("utf-8"))
-            except Exception:
-                mapping = {}
-            for num, fname in mapping.items():
-                if num in names:
-                    media[fname] = z.extract(num, tmp)
-    return os.path.join(tmp, dbname), media
-
-
-def read_collection(dbpath):
+def _read_collection(dbpath):
     con = sqlite3.connect(dbpath)
     try:
         models_json, decks_json = con.execute("select models, decks from col").fetchone()
@@ -148,12 +120,120 @@ def read_collection(dbpath):
     return json.loads(models_json), json.loads(decks_json), notes, rows
 
 
+class LazyMedia:
+    """Médias du .apkg, extraits seulement quand une carte en a besoin."""
+
+    def __init__(self, zf, mapping, tmpdir):
+        names = set(zf.namelist())
+        self._zf, self._tmp = zf, tmpdir
+        self._num = {fname: num for num, fname in mapping.items() if num in names}
+        self._done = {}
+        self._lock = threading.Lock()
+
+    def get(self, name, default=None):
+        num = self._num.get(name)
+        if num is None:
+            return default
+        with self._lock:
+            if name not in self._done:
+                self._done[name] = self._zf.extract(num, self._tmp)
+            return self._done[name]
+
+
+class Collection:
+    """Un .apkg ouvert : paquets, notes et cartes. À fermer avec close() (ou `with`)."""
+
+    def __init__(self, apkg):
+        self.path = apkg
+        self._tmp = tempfile.TemporaryDirectory()
+        self._zf = None
+        try:
+            self._open(apkg)
+        except Exception:
+            self.close()
+            raise
+
+    def _open(self, apkg):
+        try:
+            self._zf = zipfile.ZipFile(apkg)
+        except (zipfile.BadZipFile, OSError) as e:
+            raise ApkgError(f"Impossible d'ouvrir le fichier : {e}")
+        names = self._zf.namelist()
+        if "collection.anki21" in names:
+            dbname = "collection.anki21"
+        elif "collection.anki2" in names and "collection.anki21b" not in names:
+            dbname = "collection.anki2"
+        elif "collection.anki21b" in names:
+            raise ApkgError(
+                "Ce .apkg est au format récent. Ré-exporte-le depuis Anki en cochant "
+                "« Prendre en charge les anciennes versions d'Anki ».")
+        else:
+            raise ApkgError("Fichier .apkg invalide (aucune collection trouvée).")
+        self._zf.extract(dbname, self._tmp.name)
+        mapping = {}
+        if "media" in names:
+            try:
+                mapping = json.loads(self._zf.read("media").decode("utf-8"))
+            except Exception:
+                mapping = {}
+        self.media = LazyMedia(self._zf, mapping, self._tmp.name)
+        self.models, self.decks, self.notes, self._rows = _read_collection(
+            os.path.join(self._tmp.name, dbname))
+
+    def deck_names(self):
+        return sorted(d["name"] for d in self.decks.values())
+
+    def cards(self, deck=None, include_reversed=False, accent="#1a5fb4", limit=None):
+        """Liste de (items_recto, items_verso, nom_du_paquet)."""
+        out, seen = [], set()
+        for nid, did, odid, ord_ in self._rows:
+            deck_name = self.decks.get(str(odid or did), {}).get("name", "")
+            if deck and deck.lower() not in deck_name.lower():
+                continue
+            if nid not in self.notes:
+                continue
+            mid, flds = self.notes[nid]
+            model = self.models.get(str(mid))
+            if not model:
+                continue
+            if model.get("type") != 1 and not include_reversed:
+                if nid in seen:
+                    continue
+                seen.add(nid)
+            sides = build_card_sides(model, flds, ord_)
+            if not sides:
+                continue
+            fi, bi = to_items(sides[0], accent), to_items(sides[1], accent)
+            if fi or bi:
+                out.append((fi, bi, deck_name.split("::")[-1]))
+                if limit and len(out) >= limit:
+                    break
+        return out
+
+    def close(self):
+        if self._zf is not None:
+            try:
+                self._zf.close()
+            except Exception:
+                pass
+            self._zf = None
+        try:
+            self._tmp.cleanup()
+        except Exception:
+            pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+        return False
+
+
 def list_decks(apkg):
     """Noms des paquets contenus dans le .apkg."""
-    with tempfile.TemporaryDirectory() as tmp:
-        dbpath, _ = load_apkg(apkg, tmp)
-        _, decks, _, _ = read_collection(dbpath)
-    return sorted(d["name"] for d in decks.values())
+    with Collection(apkg) as col:
+        return col.deck_names()
 
 
 # --------------------------------------------------------------------------
@@ -390,6 +470,21 @@ def _draw_card(c, x, y, w, h, items, side, deck, font, media, base_size, theme):
     return _draw_content(c, items, x, y, w, h - band, font, media, base_size)
 
 
+GAP = 1.5 * mm  # espace entre cartes : la découpe n'a pas à être parfaite
+
+
+def _geometry(cols, rows, margin, landscape):
+    if cols < 1 or rows < 1:
+        raise ApkgError("Il faut au moins 1 colonne et 1 ligne.")
+    page = A4[::-1] if landscape else A4
+    W, H = page
+    m = margin * mm
+    cw, ch = (W - 2 * m) / cols, (H - 2 * m) / rows
+    if cw < 25 * mm or ch < 20 * mm:
+        raise ApkgError("Cartes trop petites : réduis le nombre de colonnes/lignes.")
+    return page, m, cw, ch
+
+
 def convert(apkg, output=None, cols=2, rows=4, margin=8.0, font_size=16.0,
             landscape=False, flip="long", deck=None, include_reversed=False,
             color=DEFAULT_COLOR, on_progress=None):
@@ -399,43 +494,12 @@ def convert(apkg, output=None, cols=2, rows=4, margin=8.0, font_size=16.0,
     (hors cloze), ce qui évite les doublons des types « Basique (et carte inversée) ».
     Mets `include_reversed=True` pour imprimer aussi les cartes inversées.
     """
-    if cols < 1 or rows < 1:
-        raise ApkgError("Il faut au moins 1 colonne et 1 ligne.")
     theme = make_theme(color)
-    page = A4[::-1] if landscape else A4
+    page, m, cw, ch = _geometry(cols, rows, margin, landscape)
     W, H = page
-    m = margin * mm
-    cw, ch = (W - 2 * m) / cols, (H - 2 * m) / rows
-    if cw < 25 * mm or ch < 20 * mm:
-        raise ApkgError("Cartes trop petites : réduis le nombre de colonnes/lignes.")
 
-    with tempfile.TemporaryDirectory() as tmp:
-        dbpath, media = load_apkg(apkg, tmp)
-        models, decks, notes, rows_db = read_collection(dbpath)
-
-        cards = []
-        seen = set()
-        for nid, did, odid, ord_ in rows_db:
-            deck_name = decks.get(str(odid or did), {}).get("name", "")
-            if deck and deck.lower() not in deck_name.lower():
-                continue
-            if nid not in notes:
-                continue
-            mid, flds = notes[nid]
-            model = models.get(str(mid))
-            if not model:
-                continue
-            if model.get("type") != 1 and not include_reversed:
-                if nid in seen:
-                    continue
-                seen.add(nid)
-            sides = build_card_sides(model, flds, ord_)
-            if not sides:
-                continue
-            fi = to_items(sides[0], theme["accent"])
-            bi = to_items(sides[1], theme["accent"])
-            if fi or bi:
-                cards.append((fi, bi, deck_name.split("::")[-1]))
+    with Collection(apkg) as col:
+        cards = col.cards(deck, include_reversed, theme["accent"])
         if not cards:
             raise ApkgError("Aucune carte trouvée (vérifie le filtre de paquet).")
 
@@ -454,17 +518,16 @@ def convert(apkg, output=None, cols=2, rows=4, margin=8.0, font_size=16.0,
             chunk = cards[start:start + per]
             for side in (0, 1):
                 for i, card in enumerate(chunk):
-                    col, row = i % cols, i // cols
+                    col_i, row_i = i % cols, i // cols
                     if side == 1:
                         if mirror_cols:
-                            col = cols - 1 - col
+                            col_i = cols - 1 - col_i
                         else:
-                            row = rows - 1 - row
-                    gap = 1.5 * mm  # espace entre cartes : la découpe n'a pas à être parfaite
-                    x = m + col * cw + gap
-                    y = H - m - (row + 1) * ch + gap
-                    if _draw_card(c, x, y, cw - 2 * gap, ch - 2 * gap, card[side], side,
-                                  card[2], font, media, font_size, theme):
+                            row_i = rows - 1 - row_i
+                    x = m + col_i * cw + GAP
+                    y = H - m - (row_i + 1) * ch + GAP
+                    if _draw_card(c, x, y, cw - 2 * GAP, ch - 2 * GAP, card[side], side,
+                                  card[2], font, col.media, font_size, theme):
                         overflow += 1
                 c.showPage()
             if on_progress:
@@ -473,3 +536,49 @@ def convert(apkg, output=None, cols=2, rows=4, margin=8.0, font_size=16.0,
 
     return {"output": out, "cards": len(cards),
             "pages": -(-len(cards) // per) * 2, "overflow": overflow}
+
+
+# --------------------------------------------------------------------------
+# Aperçu d'une carte (PDF de 2 pages : recto, verso) pour l'interface
+# --------------------------------------------------------------------------
+_SAMPLE_FRONT = "Le délai de prescription de droit commun est de <cl>[...]</cl>."
+_SAMPLE_BACK = ("Le délai de prescription de droit commun est de <cl>cinq ans</cl>."
+                "<br>Art. 2224 C. civ.")
+
+
+def render_preview(col=None, deck=None, include_reversed=False, color=DEFAULT_COLOR,
+                   cols=2, rows=4, margin=8.0, font_size=16.0, landscape=False,
+                   background="#ffffff"):
+    """Dessine une carte (recto + verso) à la taille réelle de la grille choisie.
+
+    Utilise la première carte de `col` si fourni, sinon une carte d'exemple.
+    Renvoie {"pdf": bytes, "size_pt": (w, h), "card_mm": (w, h), "sample": bool}.
+    """
+    theme = make_theme(color)
+    _, _, cw, ch = _geometry(cols, rows, margin, landscape)
+    w, h = cw - 2 * GAP, ch - 2 * GAP
+
+    card, media = None, {}
+    if col is not None:
+        found = col.cards(deck, include_reversed, theme["accent"], limit=1)
+        if found:
+            card, media = found[0], col.media
+    sample = card is None
+    if sample:
+        card = (to_items(_SAMPLE_FRONT, theme["accent"]),
+                to_items(_SAMPLE_BACK, theme["accent"]), "Droit civil")
+
+    pad = 4 * mm
+    pw, ph = w + 2 * pad, h + 2 * pad
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=(pw, ph))
+    font = setup_font()
+    bg = parse_color(background)
+    for side in (0, 1):
+        c.setFillColor(bg)
+        c.rect(0, 0, pw, ph, stroke=0, fill=1)
+        _draw_card(c, pad, pad, w, h, card[side], side, card[2], font, media, font_size, theme)
+        c.showPage()
+    c.save()
+    return {"pdf": buf.getvalue(), "size_pt": (pw, ph),
+            "card_mm": (w / mm, h / mm), "sample": sample}
