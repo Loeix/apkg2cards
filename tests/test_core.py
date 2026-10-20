@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from PIL import Image  # noqa: E402
 
 from apkg2cards import ApkgError, convert, list_decks  # noqa: E402
+from apkg2cards.core import Collection, render_preview  # noqa: E402
 from apkg2cards.core import to_items  # noqa: E402
 
 MODELS = {
@@ -84,6 +85,24 @@ class CoreTests(unittest.TestCase):
     def test_invalid_color(self):
         with self.assertRaises(ApkgError):
             convert(self.apkg, os.path.join(self.tmp.name, "o.pdf"), color="zzz")
+
+    def test_collection_and_lazy_media(self):
+        with Collection(self.apkg) as col:
+            self.assertEqual(col.deck_names(), ["Droit civil", "Droit pénal"])
+            self.assertTrue(col.media.get("a.png").endswith("0"))
+            self.assertIsNone(col.media.get("absent.png"))
+            self.assertEqual(len(col.cards(limit=1)), 1)
+
+    def test_preview_from_deck_and_sample(self):
+        with Collection(self.apkg) as col:
+            r = render_preview(col, color="#16a34a", background="#1c1f26")
+        self.assertTrue(r["pdf"].startswith(b"%PDF"))
+        self.assertFalse(r["sample"])
+        self.assertTrue(render_preview(None)["sample"])
+
+    def test_preview_rejects_tiny_cards(self):
+        with self.assertRaises(ApkgError):
+            render_preview(None, cols=6, rows=8, margin=40)
 
     def test_deck_filter(self):
         r = convert(self.apkg, os.path.join(self.tmp.name, "o.pdf"), deck="pénal")

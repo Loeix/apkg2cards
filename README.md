@@ -4,7 +4,11 @@ Convertit un paquet **Anki (`.apkg`)** en **PDF de flashcards physiques** : les 
 mises en page pour être imprimées en recto-verso puis découpées. Les versos sont placés en
 miroir pour tomber pile derrière leur recto.
 
-- Interface graphique (Tkinter) **et** ligne de commande
+- Interface graphique moderne (Qt / PySide6) **et** ligne de commande
+- **Aperçu en direct** d'une carte (recto + verso) pendant que tu règles les options,
+  avec la première carte de ton paquet
+- Thème **clair ou sombre** (suit le système au premier lancement), réglages mémorisés
+- Glisser-déposer d'un `.apkg` dans la fenêtre
 - Grille réglable (2×4 par défaut, soit ~95×71 mm par carte), portrait ou paysage
 - Texte centré, taille réduite automatiquement si la carte est longue
 - Gère le gras / italique / exposant, les images, les cartes inversées et les cloze
@@ -17,8 +21,8 @@ miroir pour tomber pile derrière leur recto.
 
 ## Installation
 
-Python 3.9+ requis (Tkinter est inclus avec Python sur Windows et macOS ;
-sous Debian/Ubuntu : `sudo apt install python3-tk`).
+Python 3.9+ requis. L'interface utilise PySide6 (Qt), installé automatiquement par
+`requirements.txt` (environ 200 Mo de dépendances ; l'installateur Windows pèse 100 Mo ou plus).
 
 ```bash
 git clone https://github.com/<ton-pseudo>/apkg2cards.git
@@ -111,4 +115,4 @@ python -m unittest discover -s tests -v
 
 ## Licence
 
-MIT — voir [LICENSE](LICENSE).
+MIT — voir [LICENSE](LICENSE). L'interface utilise PySide6 (Qt for Python), sous licence LGPL.
