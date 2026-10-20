@@ -19,7 +19,7 @@ Python 3.9+ requis (Tkinter est inclus avec Python sur Windows et macOS ;
 sous Debian/Ubuntu : `sudo apt install python3-tk`).
 
 ```bash
-git clone https://github.com/Loeix/apkg2cards.git
+git clone https://github.com/<ton-pseudo>/apkg2cards.git
 cd apkg2cards
 python -m venv .venv
 source .venv/bin/activate        # Windows : .venv\Scripts\activate
@@ -60,19 +60,21 @@ Installation en tant que commande (optionnel) : `pip install .` puis `apkg2cards
 
 ## Application Windows (installateur)
 
-Pas besoin de Python pour l'utiliser.
-
-**[⬇ Télécharger apkg2cards-setup.exe](https://github.com/Loeix/apkg2cards/releases/latest/download/apkg2cards-setup.exe)**
-(toujours la dernière version, voir aussi l'onglet [Releases](https://github.com/Loeix/apkg2cards/releases)).
-
-Lance l'installateur, puis ouvre apkg2cards depuis le menu Démarrer
+Pas besoin de Python pour l'utiliser : télécharge `apkg2cards-setup.exe` dans l'onglet
+**Releases** du dépôt, lance-le, puis ouvre apkg2cards depuis le menu Démarrer
 (l'installation ne demande pas les droits administrateur).
-
-Pour mettre à jour : bouton **Rechercher une mise à jour** dans l'application, ou retélécharge
-l'installateur et lance-le par-dessus l'ancienne version.
 
 > L'installateur n'est pas signé : Windows peut afficher « Windows a protégé votre PC ».
 > Clique sur **Informations complémentaires → Exécuter quand même**.
+
+**Construire l'installateur soi-même**
+
+- *Automatiquement (GitHub)* : onglet **Releases → Draft a new release**, tag `v0.1.0`
+  (« Create new tag on publish »), **Publish release**. Le workflow `build-windows`
+  (onglet Actions) construit l'installateur et l'ajoute à la release au bout de quelques minutes.
+- *Sur ton PC* : installe [Inno Setup 6](https://jrsoftware.org/isinfo.php), puis double-clique
+  sur `build_windows.bat`. Résultat : `installer\apkg2cards-setup.exe`.
+  Sans Inno Setup, le script produit seulement `dist\apkg2cards\apkg2cards.exe`.
 
 ## Export depuis Anki
 

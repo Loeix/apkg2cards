@@ -1,19 +1,19 @@
 """Interface graphique Tkinter."""
+import json
 import os
 import queue
 import re
 import urllib.error
+import urllib.request
+import webbrowser
 import subprocess
 import sys
 import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-import webbrowser
-
 from . import __version__
 from .core import ApkgError, convert, list_decks
-from .updater import DOWNLOAD_URL, UpdateError, check_for_update
 
 ALL_DECKS = "(tous les paquets)"
 
@@ -110,19 +110,18 @@ class App(ttk.Frame):
                                    state="disabled")
         self.open_btn.grid(row=r, column=0, columnspan=3, sticky="ew", pady=(8, 0))
 
+        r += 1
+        ttk.Separator(self).grid(row=r, column=0, columnspan=3, sticky="ew", pady=(12, 6))
+        r += 1
+        ttk.Label(self, text=f"Version {__version__}", foreground="gray").grid(
+            row=r, column=0, sticky="w")
+        ttk.Button(self, text="Rechercher une mise à jour", command=self.check_update).grid(
+            row=r, column=1, columnspan=2, sticky="e")
+
         ttk.Label(self, foreground="gray", wraplength=480, text=(
             "Impression : recto-verso, retournement sur le bord long (portrait), "
             "échelle 100 %. Fais un test sur une feuille avant le paquet entier."),
-        ).grid(row=r + 1, column=0, columnspan=3, sticky="w", pady=(10, 0))
-
-        r += 2
-        ttk.Separator(self).grid(row=r, column=0, columnspan=3, sticky="ew", pady=(12, 6))
-        r += 1
-        ttk.Label(self, foreground="gray", text=f"Version {__version__}").grid(
-            row=r, column=0, columnspan=2, sticky="w")
-        self.upd_btn = ttk.Button(self, text="Rechercher une mise à jour",
-                                  command=self.check_update)
-        self.upd_btn.grid(row=r, column=2, sticky="e")
+        ).grid(row=r + 1, column=0, columnspan=3, sticky="w", pady=(6, 0))
 
         self.after(100, self.poll)
 
@@ -183,19 +182,43 @@ class App(ttk.Frame):
 
         threading.Thread(target=work, daemon=True).start()
 
+    def check_update(self):
+        """Cherche une nouvelle version sur GitHub."""
+        self.set_status("Recherche de mise à jour…")
+
+        def parse(v):
+            return tuple(int(x) for x in re.findall(r"\d+", v)[:3])
+
+        def work():
+            link = None
+            try:
+                req = urllib.request.Request(
+                    "https://api.github.com/repos/Loeix/apkg2cards/releases/latest",
+                    headers={"User-Agent": "apkg2cards", "Accept": "application/vnd.github+json"})
+                with urllib.request.urlopen(req, timeout=10) as r:
+                    data = json.loads(r.read().decode("utf-8"))
+                latest = data.get("tag_name", "")
+                if parse(latest) > parse(__version__):
+                    link = data.get("html_url")
+                    msg = (f"Nouvelle version disponible : {latest}\n"
+                           f"Version installée : v{__version__}")
+                else:
+                    msg = f"Tu as la dernière version (v{__version__})."
+            except urllib.error.HTTPError as e:
+                msg = ("Aucune version publiée sur GitHub pour le moment."
+                       if e.code == 404 else f"Erreur GitHub (code {e.code}).")
+            except Exception as e:  # noqa: BLE001
+                msg = f"Impossible de vérifier les mises à jour.\n\nDétail : {e}"
+            self.q.put(("update", msg, link))
+
+        threading.Thread(target=work, daemon=True).start()
+
     def poll(self):
         try:
             while True:
                 msg = self.q.get_nowait()
                 if msg[0] == "p":
                     self.bar.config(maximum=msg[2], value=msg[1])
-                elif msg[0] == "upd":
-                    self.upd_btn.config(state="normal")
-                    self.show_update(msg[1])
-                elif msg[0] == "upd_err":
-                    self.upd_btn.config(state="normal")
-                    self.set_status(msg[1])
-                    messagebox.showinfo("Mise à jour", msg[1])
                 elif msg[0] == "ok":
                     r = msg[1]
                     self.last_pdf = r["output"]
@@ -205,6 +228,13 @@ class App(ttk.Frame):
                     self.set_status(txt)
                     self.btn.config(state="normal")
                     self.open_btn.config(state="normal")
+                elif msg[0] == "update":
+                    self.set_status(msg[1].split("\n")[0])
+                    if msg[2]:
+                        if messagebox.askyesno("Mise à jour", msg[1] + "\n\nOuvrir la page de téléchargement ?"):
+                            webbrowser.open(msg[2])
+                    else:
+                        messagebox.showinfo("Mise à jour", msg[1])
                 else:
                     self.set_status(f"Erreur : {msg[1]}")
                     self.btn.config(state="normal")
@@ -212,47 +242,6 @@ class App(ttk.Frame):
         except queue.Empty:
             pass
         self.after(100, self.poll)
-
-    # -- mise à jour -------------------------------------------------------
-    def check_update(self):
-        """Cherche une nouvelle version sur GitHub."""
-        def parse(v):
-            return tuple(int(x) for x in re.findall(r"\d+", v)[:3])
-
-        def work():
-            try:
-                url = "https://api.github.com/repos/Loeix/apkg2cards/releases/latest"
-                with urllib.request.urlopen(url, timeout=5) as r:
-                    data = json.loads(r.read().decode())
-                latest = data.get("tag_name", "")
-                current = "0.1.0"
-                if parse(latest) > parse(current):
-                    msg = (f"Nouvelle version disponible : {latest}\n"
-                           f"Version installée : v{current}\n\n"
-                           f"Téléchargement :\n{data.get('html_url', '')}")
-                else:
-                    msg = f"Tu as la dernière version (v{current})."
-            except urllib.error.HTTPError as e:
-                msg = ("Aucune version publiée pour le moment."
-                       if e.code == 404 else f"Erreur GitHub ({e.code}).")
-            except Exception:
-                msg = "Impossible de vérifier : pas de connexion ?"
-            self.q.put(("update", msg))
-        threading.Thread(target=work, daemon=True).start()
-
-    def show_update(self, info):
-        if not info["available"]:
-            msg = f"apkg2cards est à jour (version {info['current']})."
-            self.set_status(msg)
-            messagebox.showinfo("Mise à jour", msg)
-            return
-        self.set_status(f"Version {info['latest']} disponible.")
-        if messagebox.askyesno(
-                "Mise à jour disponible",
-                f"La version {info['latest']} est disponible (tu as la {info['current']}).\n\n"
-                "Télécharger l'installateur maintenant ? Lance-le ensuite pour mettre à jour "
-                "(ferme d'abord apkg2cards)."):
-            webbrowser.open(DOWNLOAD_URL)
 
     def open_pdf(self):
         if self.last_pdf and os.path.exists(self.last_pdf):
