@@ -1,6 +1,8 @@
 """Interface graphique Tkinter."""
 import os
 import queue
+import re
+import urllib.error
 import subprocess
 import sys
 import threading
@@ -213,17 +215,29 @@ class App(ttk.Frame):
 
     # -- mise à jour -------------------------------------------------------
     def check_update(self):
-        self.upd_btn.config(state="disabled")
-        self.set_status("Recherche de mise à jour…")
+        """Cherche une nouvelle version sur GitHub."""
+        def parse(v):
+            return tuple(int(x) for x in re.findall(r"\d+", v)[:3])
 
         def work():
             try:
-                self.q.put(("upd", check_for_update()))
-            except UpdateError as e:
-                self.q.put(("upd_err", str(e)))
-            except Exception as e:  # noqa: BLE001
-                self.q.put(("upd_err", f"Erreur inattendue : {e}"))
-
+                url = "https://api.github.com/repos/Loeix/apkg2cards/releases/latest"
+                with urllib.request.urlopen(url, timeout=5) as r:
+                    data = json.loads(r.read().decode())
+                latest = data.get("tag_name", "")
+                current = "0.1.0"
+                if parse(latest) > parse(current):
+                    msg = (f"Nouvelle version disponible : {latest}\n"
+                           f"Version installée : v{current}\n\n"
+                           f"Téléchargement :\n{data.get('html_url', '')}")
+                else:
+                    msg = f"Tu as la dernière version (v{current})."
+            except urllib.error.HTTPError as e:
+                msg = ("Aucune version publiée pour le moment."
+                       if e.code == 404 else f"Erreur GitHub ({e.code}).")
+            except Exception:
+                msg = "Impossible de vérifier : pas de connexion ?"
+            self.q.put(("update", msg))
         threading.Thread(target=work, daemon=True).start()
 
     def show_update(self, info):
