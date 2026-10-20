@@ -26,6 +26,46 @@ class ApkgError(Exception):
 
 
 # --------------------------------------------------------------------------
+# Couleurs
+# --------------------------------------------------------------------------
+DEFAULT_COLOR = "#2563eb"
+TEXT_COLOR = colors.HexColor("#1f2937")
+
+
+def parse_color(value):
+    try:
+        return colors.toColor(value)
+    except Exception:
+        raise ApkgError(f"Couleur invalide : {value!r} (exemple : #2563eb)")
+
+
+def _luminance(c):
+    return 0.299 * c.red + 0.587 * c.green + 0.114 * c.blue
+
+
+def _mix(c, other, t):
+    return colors.Color(c.red * (1 - t) + other.red * t,
+                        c.green * (1 - t) + other.green * t,
+                        c.blue * (1 - t) + other.blue * t)
+
+
+def _hex(c):
+    return "#%02x%02x%02x" % (round(c.red * 255), round(c.green * 255), round(c.blue * 255))
+
+
+def make_theme(color):
+    main = parse_color(color)
+    lum = _luminance(main)
+    return {
+        "main": main,
+        "tint": _mix(main, colors.white, 0.90),          # fond du verso
+        "on": colors.white if lum < 0.65 else TEXT_COLOR,  # texte du bandeau
+        # couleur du texte des trous (cloze), assez foncée pour rester lisible
+        "accent": _hex(_mix(main, colors.black, 0.15 if lum <= 0.6 else 0.5)),
+    }
+
+
+# --------------------------------------------------------------------------
 # Polices (accents, symboles ; DejaVu / Arial, sinon Helvetica)
 # --------------------------------------------------------------------------
 FONT_SETS = [
@@ -188,15 +228,16 @@ def build_card_sides(model, flds, ord_):
 TAGMAP = {
     "b": ["b"], "strong": ["b"], "i": ["i"], "em": ["i"], "u": ["u"],
     "sup": ["super"], "sub": ["sub"],
-    "cl": ["b", 'font color="#1a5fb4"'],
+    "cl": ["b", 'font color="ACCENT"'],
 }
 BLOCK = {"div", "p", "li", "tr", "ul", "ol", "table",
          "h1", "h2", "h3", "h4", "h5", "h6"}
 
 
 class _Conv(HTMLParser):
-    def __init__(self):
+    def __init__(self, accent="#1a5fb4"):
         super().__init__(convert_charrefs=True)
+        self.accent = accent
         self.items, self.buf = [], []
         self.stack, self.stack_start = [], []
         self.skip = 0
@@ -211,6 +252,9 @@ class _Conv(HTMLParser):
         self.buf = []
         self.stack_start = list(self.stack)
 
+    def _opens(self, tag):
+        return [t.replace("ACCENT", self.accent) for t in TAGMAP[tag]]
+
     def handle_starttag(self, tag, attrs):
         if tag in ("style", "script"):
             self.skip += 1
@@ -222,7 +266,7 @@ class _Conv(HTMLParser):
                 self.flush()
                 self.items.append(("img", unquote(src)))
         elif tag in TAGMAP:
-            for t in TAGMAP[tag]:
+            for t in self._opens(tag):
                 self.buf.append(f"<{t}>")
                 self.stack.append(t)
         elif tag in BLOCK:
@@ -234,7 +278,7 @@ class _Conv(HTMLParser):
         if tag in ("style", "script"):
             self.skip = max(0, self.skip - 1)
         elif tag in TAGMAP:
-            for t in reversed(TAGMAP[tag]):
+            for t in reversed(self._opens(tag)):
                 if self.stack and self.stack[-1] == t:
                     self.stack.pop()
                     self.buf.append(f"</{t.split()[0]}>")
@@ -246,9 +290,9 @@ class _Conv(HTMLParser):
             self.buf.append(html.escape(data.replace("\n", " "), quote=False))
 
 
-def to_items(raw):
+def to_items(raw, accent="#1a5fb4"):
     raw = re.sub(r"\[sound:[^\]]*\]", "", raw)
-    c = _Conv()
+    c = _Conv(accent)
     c.feed(raw)
     c.flush()
     return c.items
@@ -259,7 +303,7 @@ def to_items(raw):
 # --------------------------------------------------------------------------
 def _make_flowables(items, size, aw, ah, font, media, scale):
     style = ParagraphStyle("c", fontName=font, fontSize=size, leading=size * 1.25,
-                           alignment=TA_CENTER)
+                           alignment=TA_CENTER, textColor=TEXT_COLOR)
     flows = []
     for kind, val in items:
         if kind == "p":
@@ -305,9 +349,50 @@ def _draw_content(c, items, x, y, w, h, font, media, base_size):
     return total > ah
 
 
+def _draw_card(c, x, y, w, h, items, side, deck, font, media, base_size, theme):
+    """Carte arrondie avec bandeau coloré (QUESTION / RÉPONSE + nom du paquet)."""
+    r, band, main = 3.5 * mm, 8 * mm, theme["main"]
+    bold = "Helvetica-Bold" if font == "Helvetica" else font + "-B"
+
+    # fond (blanc au recto, teinté au verso) + bandeau, découpés aux coins arrondis
+    c.saveState()
+    path = c.beginPath()
+    path.roundRect(x, y, w, h, r)
+    c.clipPath(path, stroke=0, fill=0)
+    c.setFillColor(colors.white if side == 0 else theme["tint"])
+    c.rect(x, y, w, h, stroke=0, fill=1)
+    c.setFillColor(main)
+    c.rect(x, y + h - band, w, band, stroke=0, fill=1)
+    c.restoreState()
+
+    # contour : sert aussi de guide de découpe
+    c.saveState()
+    c.setStrokeColor(main)
+    c.setLineWidth(1.2)
+    c.roundRect(x, y, w, h, r, stroke=1, fill=0)
+    c.restoreState()
+
+    # libellés du bandeau
+    label = "QUESTION" if side == 0 else "RÉPONSE"
+    ty = y + h - band / 2 - 2.7
+    c.setFillColor(theme["on"])
+    c.setFont(bold, 7.5)
+    c.drawString(x + 4 * mm, ty, label)
+    maxw = w - 12 * mm - c.stringWidth(label, bold, 7.5)
+    name = deck
+    if c.stringWidth(name, font, 7) > maxw:
+        while name and c.stringWidth(name + "…", font, 7) > maxw:
+            name = name[:-1]
+        name = name + "…" if name else ""
+    c.setFont(font, 7)
+    c.drawRightString(x + w - 4 * mm, ty, name)
+
+    return _draw_content(c, items, x, y, w, h - band, font, media, base_size)
+
+
 def convert(apkg, output=None, cols=2, rows=4, margin=8.0, font_size=16.0,
             landscape=False, flip="long", deck=None, include_reversed=False,
-            on_progress=None):
+            color=DEFAULT_COLOR, on_progress=None):
     """Convertit `apkg` en PDF. Renvoie un dict (output, cards, pages, overflow).
 
     Une carte physique a deux faces : par défaut, on ne garde qu'une carte par note
@@ -316,6 +401,7 @@ def convert(apkg, output=None, cols=2, rows=4, margin=8.0, font_size=16.0,
     """
     if cols < 1 or rows < 1:
         raise ApkgError("Il faut au moins 1 colonne et 1 ligne.")
+    theme = make_theme(color)
     page = A4[::-1] if landscape else A4
     W, H = page
     m = margin * mm
@@ -346,9 +432,10 @@ def convert(apkg, output=None, cols=2, rows=4, margin=8.0, font_size=16.0,
             sides = build_card_sides(model, flds, ord_)
             if not sides:
                 continue
-            fi, bi = to_items(sides[0]), to_items(sides[1])
+            fi = to_items(sides[0], theme["accent"])
+            bi = to_items(sides[1], theme["accent"])
             if fi or bi:
-                cards.append((fi, bi))
+                cards.append((fi, bi, deck_name.split("::")[-1]))
         if not cards:
             raise ApkgError("Aucune carte trouvée (vérifie le filtre de paquet).")
 
@@ -373,14 +460,11 @@ def convert(apkg, output=None, cols=2, rows=4, margin=8.0, font_size=16.0,
                             col = cols - 1 - col
                         else:
                             row = rows - 1 - row
-                    x = m + col * cw
-                    y = H - m - (row + 1) * ch
-                    c.setStrokeColor(colors.Color(0.6, 0.6, 0.6))
-                    c.setLineWidth(0.4)
-                    c.setDash(2, 2)
-                    c.rect(x, y, cw, ch)
-                    c.setDash()
-                    if _draw_content(c, card[side], x, y, cw, ch, font, media, font_size):
+                    gap = 1.5 * mm  # espace entre cartes : la découpe n'a pas à être parfaite
+                    x = m + col * cw + gap
+                    y = H - m - (row + 1) * ch + gap
+                    if _draw_card(c, x, y, cw - 2 * gap, ch - 2 * gap, card[side], side,
+                                  card[2], font, media, font_size, theme):
                         overflow += 1
                 c.showPage()
             if on_progress:

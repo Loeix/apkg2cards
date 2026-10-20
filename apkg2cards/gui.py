@@ -10,13 +10,14 @@ import subprocess
 import sys
 import threading
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import colorchooser, filedialog, messagebox, ttk
 
 from . import __version__
 from .core import ApkgError, convert, list_decks
 
 ALL_DECKS = "(tous les paquets)"
-
+PALETTE = ["#2563eb", "#16a34a", "#dc2626", "#ea580c", "#7c3aed", "#db2777", "#0d9488", "#475569"]
+DEFAULT_COLOR = PALETTE[0]
 
 def open_file(path):
     if sys.platform.startswith("win"):
@@ -49,6 +50,8 @@ class App(ttk.Frame):
         self.landscape = tk.BooleanVar(value=False)
         self.flip = tk.StringVar(value="long")
         self.reversed = tk.BooleanVar(value=False)
+        self.color = tk.StringVar(value=DEFAULT_COLOR)
+        
 
         r = 0
         ttk.Label(self, text="Paquet Anki (.apkg)").grid(row=r, column=0, sticky="w", pady=3)
@@ -91,6 +94,17 @@ class App(ttk.Frame):
         ttk.Checkbutton(box, text="Inclure aussi les cartes inversées (doublons recto/verso)",
                         variable=self.reversed).grid(
             row=3, column=0, columnspan=4, sticky="w", pady=3)
+
+        ttk.Label(box, text="Couleur des cartes").grid(row=4, column=0, sticky="w", pady=(6, 3))
+        swatches = ttk.Frame(box)
+        swatches.grid(row=4, column=1, columnspan=3, sticky="w", pady=(6, 3))
+        for hexa in PALETTE:
+            sw = tk.Label(swatches, bg=hexa, width=3, relief="ridge", cursor="hand2")
+            sw.pack(side="left", padx=2)
+            sw.bind("<Button-1>", lambda e, h=hexa: self.set_color(h))
+        ttk.Button(swatches, text="Autre…", command=self.pick_color).pack(side="left", padx=(8, 2))
+        self.preview = tk.Label(swatches, width=6, relief="sunken", bg=self.color.get())
+        self.preview.pack(side="left", padx=4)
 
         r += 1
         self.btn = ttk.Button(self, text="Générer le PDF", command=self.start)
@@ -141,6 +155,15 @@ class App(ttk.Frame):
             self.set_status(f"Erreur : {e}")
             messagebox.showerror("Fichier invalide", str(e))
 
+    def set_color(self, hexa):
+        self.color.set(hexa)
+        self.preview.config(bg=hexa)
+
+    def pick_color(self):
+        _, hexa = colorchooser.askcolor(color=self.color.get(), title="Couleur des cartes")
+        if hexa:
+            self.set_color(hexa)
+
     def pick_out(self):
         p = filedialog.asksaveasfilename(title="Enregistrer le PDF", defaultextension=".pdf",
                                          filetypes=[("PDF", "*.pdf")])
@@ -162,6 +185,7 @@ class App(ttk.Frame):
                 margin=self.margin.get(), font_size=self.font_size.get(),
                 landscape=self.landscape.get(), flip=self.flip.get(),
                 include_reversed=self.reversed.get(),
+                color=self.color.get(),
                 deck=None if self.deck.get() == ALL_DECKS else self.deck.get())
         except tk.TclError:
             messagebox.showwarning("Valeur invalide", "Vérifie les valeurs numériques.")

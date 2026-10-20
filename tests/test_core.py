@@ -75,6 +75,16 @@ class CoreTests(unittest.TestCase):
         r = convert(self.apkg, os.path.join(self.tmp.name, "o.pdf"), include_reversed=True)
         self.assertEqual(r["cards"], 4)
 
+    def test_custom_color(self):
+        r = convert(self.apkg, os.path.join(self.tmp.name, "o.pdf"), color="#16a34a")
+        self.assertEqual(r["cards"], 3)
+        r = convert(self.apkg, os.path.join(self.tmp.name, "o2.pdf"), color="yellow")
+        self.assertEqual(r["cards"], 3)
+
+    def test_invalid_color(self):
+        with self.assertRaises(ApkgError):
+            convert(self.apkg, os.path.join(self.tmp.name, "o.pdf"), color="zzz")
+
     def test_deck_filter(self):
         r = convert(self.apkg, os.path.join(self.tmp.name, "o.pdf"), deck="pénal")
         self.assertEqual(r["cards"], 2)

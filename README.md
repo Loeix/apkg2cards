@@ -9,6 +9,8 @@ miroir pour tomber pile derrière leur recto.
 - Texte centré, taille réduite automatiquement si la carte est longue
 - Gère le gras / italique / exposant, les images, les cartes inversées et les cloze
   (trou `[...]` au recto, réponse en bleu gras au verso)
+- Cartes arrondies à bandeau coloré (QUESTION / RÉPONSE + nom du paquet), verso teinté,
+  **couleur au choix** (palette ou couleur libre)
 - Une carte par note : les cartes inversées (« Basique et carte inversée ») ne sont pas
   imprimées en double, puisqu'une carte physique a déjà deux faces (option pour les inclure)
 - Filtre par paquet
@@ -52,6 +54,7 @@ python -m apkg2cards mon_paquet.apkg --list-decks
 | `--landscape` | page en paysage | non |
 | `--flip long\|short` | retournement choisi à l'impression | `long` |
 | `--deck TEXTE` | ne garder que les paquets contenant ce texte | tous |
+| `--color` | couleur des cartes (`#rrggbb` ou nom anglais : `red`, `green`…) | `#2563eb` |
 | `--with-reversed` | imprimer aussi les cartes inversées | non |
 | `--list-decks` | liste les paquets et quitte | |
 
