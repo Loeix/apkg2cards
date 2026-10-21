@@ -3,13 +3,15 @@ import argparse
 import sys
 
 from .core import DEFAULT_COLOR, ApkgError, convert, list_decks
+from .i18n import set_language, t
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(
         prog="apkg2cards",
         description="Convertit un .apkg Anki en PDF de flashcards à imprimer "
-                    "en recto-verso et à découper.")
+                    "en recto-verso et à découper. / Converts an Anki .apkg into "
+                    "double-sided printable flashcards.")
     ap.add_argument("apkg", help="fichier .apkg à convertir")
     ap.add_argument("-o", "--output", help="PDF de sortie")
     ap.add_argument("--cols", type=int, default=2, help="cartes par ligne (défaut 2)")
@@ -24,8 +26,15 @@ def main(argv=None):
                     help=f"couleur des cartes : #rrggbb ou nom anglais (défaut {DEFAULT_COLOR})")
     ap.add_argument("--with-reversed", action="store_true",
                     help="imprimer aussi les cartes inversées (par défaut : une carte par note)")
+    ap.add_argument("--lang", choices=["fr", "en"],
+                    help="langue des messages (défaut : celle du système)")
+    ap.add_argument("--card-lang", choices=["fr", "en"],
+                    help="langue des libellés imprimés sur les cartes (défaut : --lang)")
     ap.add_argument("--list-decks", action="store_true", help="liste les paquets et quitte")
     a = ap.parse_args(argv)
+
+    if a.lang:
+        set_language(a.lang)
 
     try:
         if a.list_decks:
@@ -33,13 +42,13 @@ def main(argv=None):
             return 0
         r = convert(a.apkg, a.output, a.cols, a.rows, a.margin, a.font_size,
                     a.landscape, a.flip, a.deck,
-                    include_reversed=a.with_reversed, color=a.color)
+                    include_reversed=a.with_reversed, color=a.color, lang=a.card_lang)
     except ApkgError as e:
-        print(f"Erreur : {e}", file=sys.stderr)
+        print(t("cli.error", msg=e), file=sys.stderr)
         return 1
-    print(f"{r['cards']} cartes -> {r['output']} ({r['pages']} pages, recto-verso)")
+    print(t("cli.result", cards=r["cards"], output=r["output"], pages=r["pages"]))
     if r["overflow"]:
-        print(f"Attention : {r['overflow']} face(s) très longue(s), texte fortement réduit.")
+        print(t("cli.overflow", n=r["overflow"]))
     return 0
 
 

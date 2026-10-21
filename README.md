@@ -1,51 +1,62 @@
 # apkg2cards
 
+🇫🇷 Français · [🇬🇧 English](README.en.md)
+
 Convertit un paquet **Anki (`.apkg`)** en **PDF de flashcards physiques** : les cartes sont
 mises en page pour être imprimées en recto-verso puis découpées. Les versos sont placés en
 miroir pour tomber pile derrière leur recto.
 
-- Interface graphique moderne (Qt / PySide6) **et** ligne de commande
-- **Aperçu en direct** d'une carte (recto + verso) pendant que tu règles les options,
-  avec la première carte de ton paquet
+## Fonctionnalités
+
+- Interface moderne (Qt / PySide6) **et** ligne de commande
+- **Aperçu en direct** d'une carte (recto + verso) avec la première carte de ton paquet
+- **Français / anglais** : interface, messages et libellés imprimés sur les cartes
+  (réglage séparé possible), changement sans redémarrer
 - Thème **clair ou sombre** (suit le système au premier lancement), réglages mémorisés
-- Glisser-déposer d'un `.apkg` dans la fenêtre
-- Grille réglable (2×4 par défaut, soit ~95×71 mm par carte), portrait ou paysage
-- Texte centré, taille réduite automatiquement si la carte est longue
-- Gère le gras / italique / exposant, les images, les cartes inversées et les cloze
-  (trou `[...]` au recto, réponse en bleu gras au verso)
+- **Mise à jour intégrée** (Windows) : un clic, sans rien télécharger à la main, avec vérification
+  de la somme de contrôle ; deux **canaux** au choix : *Stable* ou *Bêta*
 - Cartes arrondies à bandeau coloré (QUESTION / RÉPONSE + nom du paquet), verso teinté,
   **couleur au choix** (palette ou couleur libre)
-- Une carte par note : les cartes inversées (« Basique et carte inversée ») ne sont pas
-  imprimées en double, puisqu'une carte physique a déjà deux faces (option pour les inclure)
-- Filtre par paquet
+- Grille réglable (2×4 par défaut, soit ~95×67 mm par carte), portrait ou paysage
+- Texte centré, taille réduite automatiquement si la carte est longue
+- Gras / italique / exposant, images, cartes inversées et cloze
+  (trou `[...]` au recto, réponse en couleur et en gras au verso)
+- Une carte par note : les cartes inversées ne sont pas imprimées en double (option pour les inclure)
+- Glisser-déposer d'un `.apkg` dans la fenêtre, filtre par paquet
 
 ## Installation
 
-Python 3.9+ requis. L'interface utilise PySide6 (Qt), installé automatiquement par
-`requirements.txt` (environ 200 Mo de dépendances ; l'installateur Windows pèse 100 Mo ou plus).
+### Windows (le plus simple)
+
+Télécharge `apkg2cards-setup.exe` dans l'onglet **Releases** du dépôt et lance-le
+(pas de droits administrateur nécessaires). Ensuite, l'application se met à jour toute seule :
+bouton **Rechercher une mise à jour**, ou bandeau vert qui apparaît au démarrage.
+
+> L'installateur n'est pas signé : Windows peut afficher « Windows a protégé votre PC ».
+> Clique sur **Informations complémentaires → Exécuter quand même**.
+
+### Depuis le code source
+
+Python 3.9+ requis. L'interface utilise PySide6 (environ 200 Mo de dépendances).
 
 ```bash
-git clone https://github.com/<ton-pseudo>/apkg2cards.git
+git clone https://github.com/Loeix/apkg2cards.git
 cd apkg2cards
 python -m venv .venv
 source .venv/bin/activate        # Windows : .venv\Scripts\activate
 pip install -r requirements.txt
+python -m apkg2cards             # interface graphique
 ```
 
-## Utilisation
+La mise à jour automatique n'existe que dans l'application installée ; depuis le code source,
+le bouton ouvre simplement la page de téléchargement.
 
-**Interface graphique** (sans argument) :
-
-```bash
-python -m apkg2cards
-```
-
-**Ligne de commande** :
+## Ligne de commande
 
 ```bash
 python -m apkg2cards mon_paquet.apkg
-python -m apkg2cards mon_paquet.apkg -o cartes.pdf --cols 3 --rows 3
-python -m apkg2cards mon_paquet.apkg --deck "Droit civil"
+python -m apkg2cards mon_paquet.apkg -o cartes.pdf --cols 3 --rows 3 --color "#16a34a"
+python -m apkg2cards mon_paquet.apkg --deck "Droit civil" --lang en
 python -m apkg2cards mon_paquet.apkg --list-decks
 ```
 
@@ -60,29 +71,9 @@ python -m apkg2cards mon_paquet.apkg --list-decks
 | `--deck TEXTE` | ne garder que les paquets contenant ce texte | tous |
 | `--color` | couleur des cartes (`#rrggbb` ou nom anglais : `red`, `green`…) | `#2563eb` |
 | `--with-reversed` | imprimer aussi les cartes inversées | non |
+| `--lang fr\|en` | langue des messages | celle du système |
+| `--card-lang fr\|en` | langue des libellés imprimés (QUESTION / ANSWER) | `--lang` |
 | `--list-decks` | liste les paquets et quitte | |
-
-Installation en tant que commande (optionnel) : `pip install .` puis `apkg2cards` /
-`apkg2cards-gui`.
-
-## Application Windows (installateur)
-
-Pas besoin de Python pour l'utiliser : télécharge `apkg2cards-setup.exe` dans l'onglet
-**Releases** du dépôt, lance-le, puis ouvre apkg2cards depuis le menu Démarrer
-(l'installation ne demande pas les droits administrateur).
-
-> L'installateur n'est pas signé : Windows peut afficher « Windows a protégé votre PC ».
-> Clique sur **Informations complémentaires → Exécuter quand même**.
-
-**Construire l'installateur soi-même**
-
-- *Automatiquement (GitHub)* : onglet **Releases → Draft a new release**, tag `v` suivi du numéro de
-  `__version__` (ex. `v0.1.2`, « Create new tag on publish »). puis **Publish release**. Le tag doit correspondre à la
-  version du code, sinon le workflow s'arrête. Le workflow `build-windows`
-  (onglet Actions) construit l'installateur et l'ajoute à la release au bout de quelques minutes.
-- *Sur ton PC* : installe [Inno Setup 6](https://jrsoftware.org/isinfo.php), puis double-clique
-  sur `build_windows.bat`. Résultat : `installer\apkg2cards-setup.exe`.
-  Sans Inno Setup, le script produit seulement `dist\apkg2cards\apkg2cards.exe`.
 
 ## Export depuis Anki
 
@@ -93,11 +84,54 @@ format récent (`.anki21b`) que l'outil ne lit pas, et il t'en avertit.
 ## Impression
 
 1. Imprime en **recto-verso**, retournement sur le **bord long** (portrait).
-   En paysage, choisis le bord court. Si tu règles l'autre option dans ton imprimante,
-   utilise `--flip short` (ou le menu « Retournement » de l'interface).
+   En paysage, choisis le bord court. Si ton imprimante est réglée autrement,
+   change le menu « Retournement » de l'interface (ou `--flip short`).
 2. Échelle **100 %** (pas « ajuster à la page »).
 3. Fais un **test sur une seule feuille** avant d'imprimer tout le paquet.
-4. Découpe le long des pointillés.
+4. Découpe le long des contours arrondis.
+
+## Mises à jour : canaux stable et bêta
+
+| Canal | Reçoit | Pour qui |
+|---|---|---|
+| **Stable** (défaut) | les versions finales (`v0.4.0`) | tout le monde |
+| **Bêta** | les versions finales **et** les pré-versions (`v0.4.1-beta.1`) | ceux qui veulent tester en avance |
+
+Le canal se choisit dans le panneau **Application** de l'interface. On ne rétrograde jamais
+automatiquement : si tu es sur une bêta plus récente que la dernière stable, tu y restes jusqu'à la
+prochaine version stable.
+
+Comment ça marche : l'application lit la liste des releases GitHub, télécharge
+`apkg2cards-setup.exe`, vérifie son SHA-256, le lance en mode silencieux puis se ferme ;
+l'installateur remplace les fichiers et relance l'application.
+
+## Publier une version (mainteneur)
+
+Le numéro de version existe à **un seul endroit** : `__version__` dans `apkg2cards/__init__.py`.
+
+| Type | `__version__` | Tag de la release | Case « pre-release » |
+|---|---|---|---|
+| Stable | `0.4.0` | `v0.4.0` | **non** |
+| Bêta | `0.4.1-beta.1` | `v0.4.1-beta.1` | **oui** |
+
+1. Change `__version__`, commit, synchronise.
+2. Sur GitHub : **Releases → Draft a new release**, tag `v` + la version, coche (ou non)
+   « Set as a pre-release », écris les notes (elles s'affichent dans la fenêtre de mise à jour),
+   puis **Publish release**.
+3. Le workflow `build-windows` (onglet Actions) vérifie que le tag, la version du code et la case
+   pre-release sont cohérents, construit l'installateur et joint `apkg2cards-setup.exe` ainsi que
+   son `.sha256` à la release. Sans ces deux fichiers, la mise à jour automatique ne propose rien.
+
+Ordre des versions : `0.4.0-beta.1` < `0.4.0-beta.2` < `0.4.0-rc.1` < `0.4.0` < `0.4.1-beta.1`.
+
+Construire l'installateur sur son PC : installe [Inno Setup 6](https://jrsoftware.org/isinfo.php)
+puis double-clique sur `build_windows.bat` (résultat : `installer\apkg2cards-setup.exe`).
+
+## Ajouter une langue
+
+Copie `apkg2cards/locales/en.py` en `xx.py`, traduis les valeurs (pas les clés), puis déclare la
+langue dans `apkg2cards/i18n.py` (`LANGUAGES` et `_load`). Le test `tests/test_i18n.py` vérifie que
+toutes les clés et tous les paramètres `{...}` sont présents.
 
 ## Limites
 
@@ -106,12 +140,15 @@ format récent (`.anki21b`) que l'outil ne lit pas, et il t'en avertit.
 - Le LaTeX / MathJax n'est pas rendu.
 - Les polices DejaVu (Linux) ou Arial (Windows/macOS) sont utilisées si présentes,
   sinon Helvetica (certains symboles peuvent manquer).
+- Mise à jour automatique : Windows uniquement, application installée.
 
 ## Développement
 
 ```bash
 python -m unittest discover -s tests -v
 ```
+
+Les tests de l'interface sont ignorés si PySide6 n'est pas installé.
 
 ## Licence
 

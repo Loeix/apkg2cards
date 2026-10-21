@@ -22,9 +22,19 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
 from reportlab.platypus import Image, Paragraph
 
+from .i18n import get_language, t, t_in
+
 
 class ApkgError(Exception):
-    """Erreur lisible par l'utilisateur (fichier invalide, format non géré...)."""
+    """Erreur lisible par l'utilisateur. Le message est une clé de traduction (voir locales/),
+    traduite dans la langue courante au moment de l'affichage."""
+
+    def __init__(self, key, **params):
+        super().__init__(key)
+        self.key, self.params = key, params
+
+    def __str__(self):
+        return t(self.key, **self.params)
 
 
 # --------------------------------------------------------------------------
@@ -38,7 +48,7 @@ def parse_color(value):
     try:
         return colors.toColor(value)
     except Exception:
-        raise ApkgError(f"Couleur invalide : {value!r} (exemple : #2563eb)")
+        raise ApkgError("err.bad_color", value=str(value))
 
 
 def _luminance(c):
@@ -114,7 +124,7 @@ def _read_collection(dbpath):
         rows = con.execute(
             "select nid, did, odid, ord from cards order by did, nid, ord").fetchall()
     except sqlite3.Error as e:
-        raise ApkgError(f"Collection Anki illisible : {e}")
+        raise ApkgError("err.collection", detail=str(e))
     finally:
         con.close()
     return json.loads(models_json), json.loads(decks_json), notes, rows
@@ -157,18 +167,16 @@ class Collection:
         try:
             self._zf = zipfile.ZipFile(apkg)
         except (zipfile.BadZipFile, OSError) as e:
-            raise ApkgError(f"Impossible d'ouvrir le fichier : {e}")
+            raise ApkgError("err.open", detail=str(e))
         names = self._zf.namelist()
         if "collection.anki21" in names:
             dbname = "collection.anki21"
         elif "collection.anki2" in names and "collection.anki21b" not in names:
             dbname = "collection.anki2"
         elif "collection.anki21b" in names:
-            raise ApkgError(
-                "Ce .apkg est au format récent. Ré-exporte-le depuis Anki en cochant "
-                "« Prendre en charge les anciennes versions d'Anki ».")
+            raise ApkgError("err.new_format")
         else:
-            raise ApkgError("Fichier .apkg invalide (aucune collection trouvée).")
+            raise ApkgError("err.invalid_apkg")
         self._zf.extract(dbname, self._tmp.name)
         mapping = {}
         if "media" in names:
@@ -429,7 +437,7 @@ def _draw_content(c, items, x, y, w, h, font, media, base_size):
     return total > ah
 
 
-def _draw_card(c, x, y, w, h, items, side, deck, font, media, base_size, theme):
+def _draw_card(c, x, y, w, h, items, side, deck, font, media, base_size, theme, labels):
     """Carte arrondie avec bandeau coloré (QUESTION / RÉPONSE + nom du paquet)."""
     r, band, main = 3.5 * mm, 8 * mm, theme["main"]
     bold = "Helvetica-Bold" if font == "Helvetica" else font + "-B"
@@ -453,7 +461,7 @@ def _draw_card(c, x, y, w, h, items, side, deck, font, media, base_size, theme):
     c.restoreState()
 
     # libellés du bandeau
-    label = "QUESTION" if side == 0 else "RÉPONSE"
+    label = labels[side]
     ty = y + h - band / 2 - 2.7
     c.setFillColor(theme["on"])
     c.setFont(bold, 7.5)
@@ -475,33 +483,34 @@ GAP = 1.5 * mm  # espace entre cartes : la découpe n'a pas à être parfaite
 
 def _geometry(cols, rows, margin, landscape):
     if cols < 1 or rows < 1:
-        raise ApkgError("Il faut au moins 1 colonne et 1 ligne.")
+        raise ApkgError("err.grid_min")
     page = A4[::-1] if landscape else A4
     W, H = page
     m = margin * mm
     cw, ch = (W - 2 * m) / cols, (H - 2 * m) / rows
     if cw < 25 * mm or ch < 20 * mm:
-        raise ApkgError("Cartes trop petites : réduis le nombre de colonnes/lignes.")
+        raise ApkgError("err.too_small")
     return page, m, cw, ch
 
 
 def convert(apkg, output=None, cols=2, rows=4, margin=8.0, font_size=16.0,
             landscape=False, flip="long", deck=None, include_reversed=False,
-            color=DEFAULT_COLOR, on_progress=None):
-    """Convertit `apkg` en PDF. Renvoie un dict (output, cards, pages, overflow).
+            color=DEFAULT_COLOR, lang=None, on_progress=None):
+    """Convertit `apkg` en PDF. `lang` : langue des libellés des cartes (défaut : langue courante). Renvoie un dict (output, cards, pages, overflow).
 
     Une carte physique a deux faces : par défaut, on ne garde qu'une carte par note
     (hors cloze), ce qui évite les doublons des types « Basique (et carte inversée) ».
     Mets `include_reversed=True` pour imprimer aussi les cartes inversées.
     """
     theme = make_theme(color)
+    labels = card_labels(lang)
     page, m, cw, ch = _geometry(cols, rows, margin, landscape)
     W, H = page
 
     with Collection(apkg) as col:
         cards = col.cards(deck, include_reversed, theme["accent"])
         if not cards:
-            raise ApkgError("Aucune carte trouvée (vérifie le filtre de paquet).")
+            raise ApkgError("err.no_cards")
 
         font = setup_font()
         out = output or os.path.splitext(apkg)[0] + "_cartes.pdf"
@@ -527,7 +536,7 @@ def convert(apkg, output=None, cols=2, rows=4, margin=8.0, font_size=16.0,
                     x = m + col_i * cw + GAP
                     y = H - m - (row_i + 1) * ch + GAP
                     if _draw_card(c, x, y, cw - 2 * GAP, ch - 2 * GAP, card[side], side,
-                                  card[2], font, col.media, font_size, theme):
+                                  card[2], font, col.media, font_size, theme, labels):
                         overflow += 1
                 c.showPage()
             if on_progress:
@@ -541,20 +550,23 @@ def convert(apkg, output=None, cols=2, rows=4, margin=8.0, font_size=16.0,
 # --------------------------------------------------------------------------
 # Aperçu d'une carte (PDF de 2 pages : recto, verso) pour l'interface
 # --------------------------------------------------------------------------
-_SAMPLE_FRONT = "Le délai de prescription de droit commun est de <cl>[...]</cl>."
-_SAMPLE_BACK = ("Le délai de prescription de droit commun est de <cl>cinq ans</cl>."
-                "<br>Art. 2224 C. civ.")
+def card_labels(lang=None):
+    """Libellés imprimés sur le bandeau : (recto, verso)."""
+    lang = lang or get_language()
+    return t_in(lang, "card.front"), t_in(lang, "card.back")
 
 
 def render_preview(col=None, deck=None, include_reversed=False, color=DEFAULT_COLOR,
                    cols=2, rows=4, margin=8.0, font_size=16.0, landscape=False,
-                   background="#ffffff"):
+                   background="#ffffff", lang=None):
     """Dessine une carte (recto + verso) à la taille réelle de la grille choisie.
 
     Utilise la première carte de `col` si fourni, sinon une carte d'exemple.
     Renvoie {"pdf": bytes, "size_pt": (w, h), "card_mm": (w, h), "sample": bool}.
     """
     theme = make_theme(color)
+    lang = lang or get_language()
+    labels = card_labels(lang)
     _, _, cw, ch = _geometry(cols, rows, margin, landscape)
     w, h = cw - 2 * GAP, ch - 2 * GAP
 
@@ -565,8 +577,9 @@ def render_preview(col=None, deck=None, include_reversed=False, color=DEFAULT_CO
             card, media = found[0], col.media
     sample = card is None
     if sample:
-        card = (to_items(_SAMPLE_FRONT, theme["accent"]),
-                to_items(_SAMPLE_BACK, theme["accent"]), "Droit civil")
+        card = (to_items(t_in(lang, "sample.front"), theme["accent"]),
+                to_items(t_in(lang, "sample.back"), theme["accent"]),
+                t_in(lang, "sample.deck"))
 
     pad = 4 * mm
     pw, ph = w + 2 * pad, h + 2 * pad
@@ -577,7 +590,8 @@ def render_preview(col=None, deck=None, include_reversed=False, color=DEFAULT_CO
     for side in (0, 1):
         c.setFillColor(bg)
         c.rect(0, 0, pw, ph, stroke=0, fill=1)
-        _draw_card(c, pad, pad, w, h, card[side], side, card[2], font, media, font_size, theme)
+        _draw_card(c, pad, pad, w, h, card[side], side, card[2], font, media, font_size,
+                   theme, labels)
         c.showPage()
     c.save()
     return {"pdf": buf.getvalue(), "size_pt": (pw, ph),

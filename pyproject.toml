@@ -18,7 +18,7 @@ apkg2cards = "apkg2cards.__main__:main"
 apkg2cards-gui = "apkg2cards.gui:main"
 
 [tool.setuptools]
-packages = ["apkg2cards"]
+packages = ["apkg2cards", "apkg2cards.locales"]
 
 [tool.setuptools.dynamic]
 version = {attr = "apkg2cards.__version__"}
