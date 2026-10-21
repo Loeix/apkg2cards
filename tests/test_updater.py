@@ -17,6 +17,7 @@ from apkg2cards.updater import UpdateCancelled, UpdateError  # noqa: E402
 # les tests ne cassent donc pas quand on change __version__.
 _base = updater.parse_version(__version__)[:3]
 CURRENT = __version__
+BASE = ".".join(str(n) for n in _base)  # version stable de même numéro (sans -beta)
 PATCH_UP = f"{_base[0]}.{_base[1]}.{_base[2] + 1}"
 MINOR_UP = f"{_base[0]}.{_base[1] + 1}.0"
 MAJOR_UP = f"{_base[0] + 1}.0.0"
@@ -77,7 +78,7 @@ class VersionTests(unittest.TestCase):
 class ChannelTests(unittest.TestCase):
     def setUp(self):
         self.rels = [release("v" + PATCH_UP + "-beta.1", prerelease=True),
-                     release("v" + CURRENT),
+                     release("v" + BASE),
                      release("v" + MINOR_UP + "-beta.1", prerelease=True),
                      release("v" + MINOR_UP, installer=False),  # installateur pas encore prêt
                      release("v" + MAJOR_UP, draft=True),
@@ -85,13 +86,13 @@ class ChannelTests(unittest.TestCase):
 
     def test_stable_ignores_betas(self):
         with fake_get(self.rels):
-            r = updater.check_for_update(CURRENT, "stable")
+            r = updater.check_for_update(BASE, "stable")
         self.assertFalse(r["available"])
-        self.assertEqual(r["version"], CURRENT)
+        self.assertEqual(r["version"], BASE)
 
     def test_beta_takes_newest_including_prereleases(self):
         with fake_get(self.rels):
-            r = updater.check_for_update(CURRENT, "beta")
+            r = updater.check_for_update(BASE, "beta")
         self.assertTrue(r["available"])
         self.assertEqual(r["version"], MINOR_UP + "-beta.1")
         self.assertTrue(r["prerelease"])
@@ -100,11 +101,11 @@ class ChannelTests(unittest.TestCase):
 
     def test_unknown_channel_falls_back_to_stable(self):
         with fake_get(self.rels):
-            self.assertEqual(updater.check_for_update(CURRENT, "???")["channel"], "stable")
+            self.assertEqual(updater.check_for_update(BASE, "???")["channel"], "stable")
 
     def test_stable_update_available(self):
         with fake_get([release("v" + PATCH_UP, body="Nouveautés")]):
-            r = updater.check_for_update(CURRENT)
+            r = updater.check_for_update(BASE)
         self.assertTrue(r["available"])
         self.assertEqual(r["notes"], "Nouveautés")
         self.assertTrue(r["asset_url"].endswith("setup.exe"))
@@ -112,11 +113,11 @@ class ChannelTests(unittest.TestCase):
     def test_prerelease_flag_wins_over_tag(self):
         with fake_get([release("v" + PATCH_UP, prerelease=True)]):
             with self.assertRaises(UpdateError):  # rien pour le canal stable
-                updater.check_for_update(CURRENT, "stable")
+                updater.check_for_update(BASE, "stable")
 
     def test_no_downgrade_from_beta_to_older_stable(self):
         installed = PATCH_UP + "-beta.1"
-        with fake_get([release("v" + CURRENT)]):
+        with fake_get([release("v" + BASE)]):
             self.assertFalse(updater.check_for_update(installed, "stable")["available"])
 
     def test_final_replaces_installed_beta(self):
@@ -127,15 +128,15 @@ class ChannelTests(unittest.TestCase):
     def test_no_release(self):
         with fake_get([]):
             with self.assertRaises(UpdateError):
-                updater.check_for_update(CURRENT)
+                updater.check_for_update(BASE)
 
     def test_garbage(self):
         with mock.patch.object(updater, "_http_get", return_value=b"<html>"):
             with self.assertRaises(UpdateError):
-                updater.check_for_update(CURRENT)
+                updater.check_for_update(BASE)
         with mock.patch.object(updater, "_http_get", return_value=b'{"a": 1}'):
             with self.assertRaises(UpdateError):
-                updater.check_for_update(CURRENT)
+                updater.check_for_update(BASE)
 
     def test_errors_are_translated(self):
         from apkg2cards import i18n
