@@ -38,7 +38,7 @@ bouton **Rechercher une mise à jour**, ou bandeau vert qui apparaît au démarr
 
 ### Depuis le code source
 
-Python 3.9+ requis. L'interface utilise PySide6 (environ 200 Mo de dépendances).
+Python 3.10+ requis. L'interface utilise PySide6 (environ 200 Mo de dépendances).
 
 ```bash
 git clone https://github.com/Loeix/apkg2cards.git

@@ -37,7 +37,7 @@ Download `apkg2cards-setup.exe` from the repository's **Releases** tab and run i
 
 ### From source
 
-Python 3.9+ required. The interface uses PySide6 (about 200 MB of dependencies).
+Python 3.10+ required. The interface uses PySide6 (about 200 MB of dependencies).
 
 ```bash
 git clone https://github.com/Loeix/apkg2cards.git

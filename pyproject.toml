@@ -7,7 +7,7 @@ name = "apkg2cards"
 dynamic = ["version"]
 description = "Convertit un paquet Anki (.apkg) en PDF de flashcards à imprimer en recto-verso et à découper"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = { text = "MIT" }
 dependencies = ["reportlab>=4.0", "pillow>=10.0", "PySide6>=6.6"]
 
