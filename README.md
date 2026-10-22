@@ -9,7 +9,8 @@ miroir pour tomber pile derrière leur recto.
 ## Fonctionnalités
 
 - Interface moderne (Qt / PySide6) **et** ligne de commande
-- **Aperçu en direct** d'une carte (recto + verso) avec la première carte de ton paquet
+- **Aperçu en direct de la page A4 entière** (recto et verso en miroir, avec les vraies cartes de
+  ton paquet), ou d'une seule carte en gros plan ; bouton **Réinitialiser** pour la mise en page
 - **Français / anglais** : interface, messages et libellés imprimés sur les cartes
   (réglage séparé possible), changement sans redémarrer
 - Thème **clair ou sombre** (suit le système au premier lancement), réglages mémorisés

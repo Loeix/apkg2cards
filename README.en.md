@@ -8,7 +8,8 @@ to be printed double-sided and cut out. Backs are mirrored so each one lands exa
 ## Features
 
 - Modern interface (Qt / PySide6) **and** command line
-- **Live preview** of a card (front + back) using the first card of your deck
+- **Live preview of the whole A4 page** (front and mirrored back, with your deck's real cards),
+  or a close-up of a single card; **Reset** button for the layout
 - **English / French**: interface, messages and the labels printed on the cards
   (can be set separately), switchable without restarting
 - **Light or dark** theme (follows the system on first launch), settings remembered

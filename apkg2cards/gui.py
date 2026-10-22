@@ -8,19 +8,24 @@ from PySide6.QtCore import (QBuffer, QByteArray, QIODevice, QLibraryInfo, QObjec
                             QUrl, Signal)
 from PySide6.QtGui import QColor, QDesktopServices, QImage, QPainter, QPalette, QPen
 from PySide6.QtPdf import QPdfDocument
-from PySide6.QtWidgets import (QApplication, QCheckBox, QColorDialog, QComboBox, QDialog,
+from PySide6.QtWidgets import (QApplication, QBoxLayout, QButtonGroup, QCheckBox,
+                               QColorDialog, QComboBox, QDialog,
                                QDoubleSpinBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout,
                                QLabel, QLineEdit, QMainWindow, QMessageBox, QProgressBar,
                                QPushButton, QScrollArea, QSizePolicy, QSpinBox, QTextBrowser,
                                QVBoxLayout, QWidget)
 
 from . import __version__, updater
-from .core import DEFAULT_COLOR, ApkgError, Collection, convert, render_preview
+from .core import (DEFAULT_COLOR, ApkgError, Collection, convert, render_page_preview,
+                   render_preview)
 from .i18n import LANGUAGES, detect_system_language, get_language, set_language, t
 from .updater import UpdateError
 
 PALETTE = ["#2563eb", "#16a34a", "#dc2626", "#ea580c", "#7c3aed", "#db2777", "#0d9488", "#475569"]
 ACCENT, ACCENT_HOVER = "#2563eb", "#1d4ed8"
+# Réglages de la zone « Mise en page » : valeurs du bouton de réinitialisation
+LAYOUT_DEFAULTS = dict(cols=2, rows=4, margin=8, font=16, landscape=False, reversed=False,
+                       flip="long", card_lang="auto")
 GREEN, GREEN_HOVER = "#16a34a", "#15803d"
 
 THEMES = {
@@ -76,6 +81,8 @@ def build_qss(t_, icons):
                    border-radius: 8px; padding: 6px 14px; }}
     QPushButton:hover {{ background: {t_['btn_hover']}; }}
     QPushButton:disabled {{ color: {t_['muted']}; }}
+    QPushButton:checked {{ background: {ACCENT}; border: 1px solid {ACCENT}; color: white; }}
+    QPushButton#small {{ padding: 3px 12px; }}
     QPushButton#primary {{ background: {ACCENT}; border: none; color: white;
                            font-weight: 600; padding: 11px 16px; font-size: 14px; }}
     QPushButton#primary:hover {{ background: {ACCENT_HOVER}; }}
@@ -190,15 +197,16 @@ class CardView(QWidget):
         super().__init__()
         self._img = None
         self._text = ""
+        self._paper = False
         self.setMinimumSize(170, 130)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
-    def set_image(self, img):
-        self._img, self._text = img, ""
+    def set_image(self, img, paper=False):
+        self._img, self._text, self._paper = img, "", paper
         self.update()
 
     def set_text(self, text):
-        self._img, self._text = None, text
+        self._img, self._text, self._paper = None, text, False
         self.update()
 
     def paintEvent(self, _):
@@ -208,10 +216,18 @@ class CardView(QWidget):
             p.setPen(self.palette().color(QPalette.PlaceholderText))
             p.drawText(self.rect(), Qt.AlignCenter | Qt.TextWordWrap, self._text)
             return
+        margin = 6 if self._paper else 0  # place pour l'ombre de la feuille
         size = QSize(self._img.size())
-        size.scale(self.size(), Qt.KeepAspectRatio)
+        size.scale(self.size() - QSize(2 * margin, 2 * margin), Qt.KeepAspectRatio)
         x, y = (self.width() - size.width()) // 2, (self.height() - size.height()) // 2
-        p.drawImage(QRect(x, y, size.width(), size.height()), self._img)
+        rect = QRect(x, y, size.width(), size.height())
+        if self._paper:
+            for grow, alpha in ((4, 18), (2, 30), (1, 40)):
+                p.fillRect(rect.adjusted(-grow, -grow + 2, grow, grow + 2), QColor(0, 0, 0, alpha))
+        p.drawImage(rect, self._img)
+        if self._paper:
+            p.setPen(QColor(0, 0, 0, 45))
+            p.drawRect(rect.adjusted(0, 0, -1, -1))
 
 
 def label(text="", object_name=None, wrap=False):
@@ -362,6 +378,7 @@ class MainWindow(QMainWindow):
         self.apkg_path = ""
         self.last_pdf = None
         self.update_info = None
+        self.preview_mode = "page"
         self.color = DEFAULT_COLOR
         self.theme = "light"
         self._gen = 0
@@ -405,9 +422,16 @@ class MainWindow(QMainWindow):
         c.toggled.connect(slot)
         return c
 
-    def _panel(self, key):
+    def _panel(self, key, extra=None):
         frame, lay, title = panel()
         self._reg(title.setText, key)
+        if extra is not None:  # widget à droite du titre
+            lay.removeWidget(title)
+            row = QHBoxLayout()
+            row.addWidget(title)
+            row.addStretch(1)
+            row.addWidget(extra)
+            lay.insertLayout(0, row)
         return frame, lay
 
     def retranslate(self):
@@ -422,6 +446,7 @@ class MainWindow(QMainWindow):
         self.channel.setItemText(1, t("channel.beta"))
         self._refresh_theme_btn()
         self._refresh_banner()
+        self._refresh_reset_btn()
         self.set_status(*self._status[:1], **self._status[1])
         self.schedule_preview()
 
@@ -519,7 +544,10 @@ class MainWindow(QMainWindow):
         sl.addWidget(col_panel)
 
         # -- mise en page
-        lay_panel, ll = self._panel("panel.layout")
+        self.reset_btn = self._button("btn.reset_layout", self.reset_layout)
+        self.reset_btn.setObjectName("small")
+        self._reg(self.reset_btn.setToolTip, "btn.reset_layout_tip")
+        lay_panel, ll = self._panel("panel.layout", extra=self.reset_btn)
         grid = QGridLayout()
         grid.setHorizontalSpacing(10)
         grid.setVerticalSpacing(8)
@@ -611,10 +639,23 @@ class MainWindow(QMainWindow):
 
         # colonne droite : aperçu
         prev, pl = self._panel("preview.title")
+        top = QHBoxLayout()
         self.prev_sub = label("", "muted")
-        pl.addWidget(self.prev_sub)
-        cards = QHBoxLayout()
-        cards.setSpacing(16)
+        top.addWidget(self.prev_sub, 1)
+        self.mode_group = QButtonGroup(self)
+        self.mode_group.setExclusive(True)
+        self.mode_page = self._button("preview.mode_page")
+        self.mode_card = self._button("preview.mode_card")
+        for mode, btn in (("page", self.mode_page), ("card", self.mode_card)):
+            btn.setCheckable(True)
+            btn.setProperty("mode", mode)
+            self.mode_group.addButton(btn)
+            top.addWidget(btn)
+        self.mode_page.setChecked(True)
+        self.mode_group.buttonClicked.connect(self._mode_changed)
+        pl.addLayout(top)
+        self.cards_layout = QBoxLayout(QBoxLayout.LeftToRight)
+        self.cards_layout.setSpacing(16)
         self.view_front, self.view_back = CardView(), CardView()
         for key, view in (("preview.recto", self.view_front), ("preview.verso", self.view_back)):
             colw = QVBoxLayout()
@@ -622,8 +663,8 @@ class MainWindow(QMainWindow):
             cap.setAlignment(Qt.AlignCenter)
             colw.addWidget(cap)
             colw.addWidget(view, 1)
-            cards.addLayout(colw, 1)
-        pl.addLayout(cards, 1)
+            self.cards_layout.addLayout(colw, 1)
+        pl.addLayout(self.cards_layout, 1)
         self.prev_info = label("", "muted")
         self.prev_info.setAlignment(Qt.AlignCenter)
         pl.addWidget(self.prev_info)
@@ -768,16 +809,51 @@ class MainWindow(QMainWindow):
         return None if self.deck_box.currentIndex() <= 0 else self.deck_box.currentText()
 
     def schedule_preview(self, *_):
+        self._refresh_reset_btn()
         self._timer.start(120)
+
+    def _mode_changed(self, btn):
+        self.preview_mode = btn.property("mode")
+        self.schedule_preview()
+
+    def _is_default_layout(self):
+        d = LAYOUT_DEFAULTS
+        return (self.cols.value() == d["cols"] and self.rows.value() == d["rows"]
+                and self.margin.value() == d["margin"] and self.font.value() == d["font"]
+                and self.landscape.isChecked() == d["landscape"]
+                and self.reversed.isChecked() == d["reversed"]
+                and self.flip.currentData() == d["flip"]
+                and self.card_lang.currentData() == d["card_lang"])
+
+    def _refresh_reset_btn(self):
+        btn = getattr(self, "reset_btn", None)
+        if btn is not None and hasattr(self, "card_lang"):
+            btn.setEnabled(not self._is_default_layout())
+
+    def reset_layout(self):
+        """Remet tous les réglages de « Mise en page » à leur valeur par défaut."""
+        d = LAYOUT_DEFAULTS
+        self.cols.setValue(d["cols"])
+        self.rows.setValue(d["rows"])
+        self.margin.setValue(d["margin"])
+        self.font.setValue(d["font"])
+        self.landscape.setChecked(d["landscape"])
+        self.reversed.setChecked(d["reversed"])
+        self.flip.setCurrentIndex(max(self.flip.findData(d["flip"]), 0))
+        self.card_lang.setCurrentIndex(max(self.card_lang.findData(d["card_lang"]), 0))
 
     def refresh_preview(self):
         self._gen += 1
         gen, col, deck, opts = self._gen, self.collection, self._deck(), self._opts()
+        mode, flip = self.preview_mode, self.flip.currentData()
         bg = THEMES[self.theme]["panel"]
 
         def work():
-            r = render_preview(col, deck=deck, background=bg, **opts)
-            r["gen"] = gen
+            if mode == "page":
+                r = render_page_preview(col, deck=deck, flip=flip, **opts)
+            else:
+                r = render_preview(col, deck=deck, background=bg, **opts)
+            r["gen"], r["mode"] = gen, mode
             return r
 
         task = Task(work)
@@ -796,20 +872,32 @@ class MainWindow(QMainWindow):
         if doc.status() != QPdfDocument.Status.Ready:
             self._preview_failed(t("preview.render_failed"))
             return
-        scale = 2.6 * self.devicePixelRatioF()
+        page_mode = r["mode"] == "page"
+        scale = (1.8 if page_mode else 2.6) * self.devicePixelRatioF()
         imgs = []
         for i in (0, 1):
             ps = doc.pagePointSize(i)
             imgs.append(doc.render(i, QSize(int(ps.width() * scale), int(ps.height() * scale))))
         doc.close()
         buf.close()
-        self.view_front.set_image(imgs[0])
-        self.view_back.set_image(imgs[1])
-        self.prev_sub.setText(t("preview.sample") if r["sample"] else t("preview.first"))
+        self.view_front.set_image(imgs[0], paper=page_mode)
+        self.view_back.set_image(imgs[1], paper=page_mode)
         w, h = r["card_mm"]
         o = self._opts()
-        self.prev_info.setText(t("preview.info", w=f"{w:.0f}", h=f"{h:.0f}",
-                                 n=o["cols"] * o["rows"]))
+        n = o["cols"] * o["rows"]
+        if page_mode:
+            # pages en paysage : recto au-dessus du verso, pour garder une taille lisible
+            self.cards_layout.setDirection(
+                QBoxLayout.TopToBottom if r["landscape"] else QBoxLayout.LeftToRight)
+            self.prev_sub.setText(t("preview.page_sample") if r["sample"]
+                                  else t("preview.page_first"))
+            orient = t("orient.landscape" if r["landscape"] else "orient.portrait")
+            self.prev_info.setText(t("preview.page_info", orient=orient, n=n,
+                                     w=f"{w:.0f}", h=f"{h:.0f}"))
+        else:
+            self.cards_layout.setDirection(QBoxLayout.LeftToRight)
+            self.prev_sub.setText(t("preview.sample") if r["sample"] else t("preview.first"))
+            self.prev_info.setText(t("preview.info", w=f"{w:.0f}", h=f"{h:.0f}", n=n))
 
     def _preview_failed(self, msg):
         for v in (self.view_front, self.view_back):
@@ -941,6 +1029,8 @@ class MainWindow(QMainWindow):
         self.flip.setCurrentIndex(max(self.flip.findData(s.value("flip", "long")), 0))
         self.card_lang.setCurrentIndex(max(self.card_lang.findData(s.value("card_lang", "auto")), 0))
         self.autocheck.setChecked(as_bool(s.value("auto_check"), True))
+        self.preview_mode = "card" if s.value("preview_mode") == "card" else "page"
+        (self.mode_card if self.preview_mode == "card" else self.mode_page).setChecked(True)
         self.channel.setCurrentIndex(max(self.channel.findData(s.value("channel", "stable")), 0))
         self.color = s.value("color", DEFAULT_COLOR)
         self._show_custom_swatch(self.color)
@@ -959,6 +1049,7 @@ class MainWindow(QMainWindow):
         s.setValue("flip", self.flip.currentData())
         s.setValue("card_lang", self.card_lang.currentData())
         s.setValue("auto_check", self.autocheck.isChecked())
+        s.setValue("preview_mode", self.preview_mode)
         s.setValue("channel", self.channel.currentData())
         s.setValue("color", self.color)
         s.sync()

@@ -43,7 +43,10 @@ class GuiTests(unittest.TestCase):
         if self.win.collection is not None:
             self.win.collection.close()
             self.win.collection = None
+        self.win._timer.stop()
         self.win.close()
+        self.win.deleteLater()
+        self.app.processEvents()  # laisse Qt détruire proprement la fenêtre avant la suivante
         self.tmp.cleanup()
         i18n.set_language("en")
 
@@ -60,8 +63,10 @@ class GuiTests(unittest.TestCase):
         self.pump(lambda: w.deck_box.count() > 1)
         self.assertEqual(w.deck_box.count(), 3)  # tous + 2 paquets
         w.set_color("#16a34a")
-        self.pump(lambda: "deck" in w.prev_sub.text())
-        self.assertIn("First card", w.prev_sub.text())
+        self.pump(lambda: "First page" in w.prev_sub.text())  # aperçu de page par défaut
+        w.mode_card.click()
+        self.pump(lambda: "First card" in w.prev_sub.text())
+        self.assertIn("94", w.prev_info.text())
 
     def test_language_switch_retranslates_everything(self):
         w = self.win
@@ -75,6 +80,44 @@ class GuiTests(unittest.TestCase):
         w.lang_box.setCurrentIndex(w.lang_box.findData("en"))
         self.assertEqual(w.go_btn.text(), "Generate PDF")
         self.assertEqual(w.flip.itemText(1), "Short edge")
+
+    def test_page_preview_is_default_and_mode_is_remembered(self):
+        w = self.win
+        self.assertEqual(w.preview_mode, "page")
+        self.pump(lambda: "layout" in w.prev_sub.text())  # carte d'exemple : « Sample layout »
+        self.assertIn("A4 portrait", w.prev_info.text())
+        w.landscape.setChecked(True)
+        self.pump(lambda: "A4 landscape" in w.prev_info.text())
+        w.mode_card.click()
+        w.save_settings()
+        self.assertEqual(self.settings.value("preview_mode"), "card")
+
+    def test_reset_layout_restores_defaults(self):
+        w = self.win
+        self.assertFalse(w.reset_btn.isEnabled())  # déjà aux valeurs par défaut
+        w.cols.setValue(3)
+        w.rows.setValue(2)
+        w.margin.setValue(15)
+        w.landscape.setChecked(True)
+        w.reversed.setChecked(True)
+        w.flip.setCurrentIndex(w.flip.findData("short"))
+        w.card_lang.setCurrentIndex(w.card_lang.findData("fr"))
+        self.assertTrue(w.reset_btn.isEnabled())
+        w.reset_btn.click()
+        self.assertEqual((w.cols.value(), w.rows.value(), int(w.margin.value()),
+                          int(w.font.value())), (2, 4, 8, 16))
+        self.assertFalse(w.landscape.isChecked())
+        self.assertFalse(w.reversed.isChecked())
+        self.assertEqual(w.flip.currentData(), "long")
+        self.assertEqual(w.card_lang.currentData(), "auto")
+        self.assertFalse(w.reset_btn.isEnabled())
+
+    def test_reset_layout_keeps_the_color(self):
+        w = self.win
+        w.set_color("#dc2626")
+        w.cols.setValue(3)
+        w.reset_btn.click()
+        self.assertEqual(w.color, "#dc2626")
 
     def test_language_is_remembered(self):
         w = self.win

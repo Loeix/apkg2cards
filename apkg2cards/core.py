@@ -493,6 +493,33 @@ def _geometry(cols, rows, margin, landscape):
     return page, m, cw, ch
 
 
+def _mirror_cols(landscape, flip):
+    """Au verso, on miroite l'axe autour duquel la feuille est retournée."""
+    long_edge_is_vertical = not landscape
+    return (flip == "long") == long_edge_is_vertical
+
+
+def _draw_sheet(c, chunk, side, page, m, cw, ch, cols, rows, mirror_cols, font, media,
+                base_size, theme, labels):
+    """Dessine une page de cartes (side 0 = recto, 1 = verso en miroir). Renvoie le nombre
+    de faces dont le texte a dû être très réduit."""
+    H = page[1]
+    overflow = 0
+    for i, card in enumerate(chunk):
+        col_i, row_i = i % cols, i // cols
+        if side == 1:
+            if mirror_cols:
+                col_i = cols - 1 - col_i
+            else:
+                row_i = rows - 1 - row_i
+        x = m + col_i * cw + GAP
+        y = H - m - (row_i + 1) * ch + GAP
+        if _draw_card(c, x, y, cw - 2 * GAP, ch - 2 * GAP, card[side], side,
+                      card[2], font, media, base_size, theme, labels):
+            overflow += 1
+    return overflow
+
+
 def convert(apkg, output=None, cols=2, rows=4, margin=8.0, font_size=16.0,
             landscape=False, flip="long", deck=None, include_reversed=False,
             color=DEFAULT_COLOR, lang=None, on_progress=None):
@@ -505,7 +532,6 @@ def convert(apkg, output=None, cols=2, rows=4, margin=8.0, font_size=16.0,
     theme = make_theme(color)
     labels = card_labels(lang)
     page, m, cw, ch = _geometry(cols, rows, margin, landscape)
-    W, H = page
 
     with Collection(apkg) as col:
         cards = col.cards(deck, include_reversed, theme["accent"])
@@ -517,27 +543,14 @@ def convert(apkg, output=None, cols=2, rows=4, margin=8.0, font_size=16.0,
         c = canvas.Canvas(out, pagesize=page)
         c.setTitle("Flashcards")
 
-        # Au verso, on miroite l'axe autour duquel la feuille est retournée.
-        long_edge_is_vertical = not landscape
-        mirror_cols = (flip == "long") == long_edge_is_vertical
-
+        mirror = _mirror_cols(landscape, flip)
         per = cols * rows
         overflow = 0
         for start in range(0, len(cards), per):
             chunk = cards[start:start + per]
             for side in (0, 1):
-                for i, card in enumerate(chunk):
-                    col_i, row_i = i % cols, i // cols
-                    if side == 1:
-                        if mirror_cols:
-                            col_i = cols - 1 - col_i
-                        else:
-                            row_i = rows - 1 - row_i
-                    x = m + col_i * cw + GAP
-                    y = H - m - (row_i + 1) * ch + GAP
-                    if _draw_card(c, x, y, cw - 2 * GAP, ch - 2 * GAP, card[side], side,
-                                  card[2], font, col.media, font_size, theme, labels):
-                        overflow += 1
+                overflow += _draw_sheet(c, chunk, side, page, m, cw, ch, cols, rows, mirror,
+                                        font, col.media, font_size, theme, labels)
                 c.showPage()
             if on_progress:
                 on_progress(min(start + per, len(cards)), len(cards))
@@ -556,10 +569,52 @@ def card_labels(lang=None):
     return t_in(lang, "card.front"), t_in(lang, "card.back")
 
 
+def render_page_preview(col=None, deck=None, include_reversed=False, color=DEFAULT_COLOR,
+                        cols=2, rows=4, margin=8.0, font_size=16.0, landscape=False,
+                        flip="long", lang=None):
+    """Dessine la première page telle qu'elle sera imprimée : recto puis verso en miroir.
+
+    Utilise les premières cartes de `col` si fourni (sinon une carte d'exemple répétée).
+    Même code de mise en page que convert() : ce que tu vois est ce que tu imprimes.
+    Renvoie {"pdf", "size_pt", "card_mm", "sample", "landscape", "per_page", "shown"}.
+    """
+    theme = make_theme(color)
+    lang = lang or get_language()
+    labels = card_labels(lang)
+    page, m, cw, ch = _geometry(cols, rows, margin, landscape)
+    per = cols * rows
+
+    cards, media = [], {}
+    if col is not None:
+        cards = col.cards(deck, include_reversed, theme["accent"], limit=per)
+        media = col.media
+    sample = not cards
+    if sample:
+        one = (to_items(t_in(lang, "sample.front"), theme["accent"]),
+               to_items(t_in(lang, "sample.back"), theme["accent"]),
+               t_in(lang, "sample.deck"))
+        cards, media = [one] * per, {}
+
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=page)
+    font = setup_font()
+    mirror = _mirror_cols(landscape, flip)
+    for side in (0, 1):
+        c.setFillColor(colors.white)  # la feuille de papier
+        c.rect(0, 0, page[0], page[1], stroke=0, fill=1)
+        _draw_sheet(c, cards, side, page, m, cw, ch, cols, rows, mirror, font, media,
+                    font_size, theme, labels)
+        c.showPage()
+    c.save()
+    return {"pdf": buf.getvalue(), "size_pt": page,
+            "card_mm": ((cw - 2 * GAP) / mm, (ch - 2 * GAP) / mm), "sample": sample,
+            "landscape": landscape, "per_page": per, "shown": len(cards)}
+
+
 def render_preview(col=None, deck=None, include_reversed=False, color=DEFAULT_COLOR,
                    cols=2, rows=4, margin=8.0, font_size=16.0, landscape=False,
                    background="#ffffff", lang=None):
-    """Dessine une carte (recto + verso) à la taille réelle de la grille choisie.
+    """Dessine une seule carte (recto + verso) à la taille réelle de la grille choisie.
 
     Utilise la première carte de `col` si fourni, sinon une carte d'exemple.
     Renvoie {"pdf": bytes, "size_pt": (w, h), "card_mm": (w, h), "sample": bool}.

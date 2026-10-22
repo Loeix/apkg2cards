@@ -1,4 +1,5 @@
 import json
+import re
 import os
 import sqlite3
 import sys
@@ -11,7 +12,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from PIL import Image  # noqa: E402
 
 from apkg2cards import ApkgError, convert, list_decks  # noqa: E402
-from apkg2cards.core import Collection, render_preview  # noqa: E402
+from apkg2cards.core import Collection, render_page_preview, render_preview  # noqa: E402
 from apkg2cards.core import to_items  # noqa: E402
 
 MODELS = {
@@ -99,6 +100,27 @@ class CoreTests(unittest.TestCase):
         self.assertTrue(r["pdf"].startswith(b"%PDF"))
         self.assertFalse(r["sample"])
         self.assertTrue(render_preview(None)["sample"])
+
+    def test_page_preview_is_a_full_a4_sheet(self):
+        with Collection(self.apkg) as col:
+            r = render_page_preview(col, color="#16a34a")
+        self.assertTrue(r["pdf"].startswith(b"%PDF"))
+        self.assertEqual(len(re.findall(rb"/Type /Page(?!s)", r["pdf"])), 2)  # recto + verso
+        self.assertAlmostEqual(r["size_pt"][0], 595.3, delta=0.5)
+        self.assertAlmostEqual(r["size_pt"][1], 841.9, delta=0.5)
+        self.assertFalse(r["sample"])
+        self.assertEqual(r["per_page"], 8)
+        self.assertEqual(r["shown"], 3)  # les 3 cartes du paquet de test
+
+    def test_page_preview_without_deck_fills_the_grid_with_a_sample(self):
+        r = render_page_preview(None, cols=3, rows=2, landscape=True, flip="short")
+        self.assertTrue(r["sample"])
+        self.assertEqual(r["shown"], 6)
+        self.assertGreater(r["size_pt"][0], r["size_pt"][1])  # paysage
+
+    def test_page_preview_rejects_tiny_cards(self):
+        with self.assertRaises(ApkgError):
+            render_page_preview(None, cols=6, rows=8, margin=40)
 
     def test_preview_rejects_tiny_cards(self):
         with self.assertRaises(ApkgError):
