@@ -22,6 +22,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
 from reportlab.platypus import Image, Paragraph
 
+from . import formats
 from .i18n import get_language, t, t_in
 
 
@@ -130,6 +131,17 @@ def _read_collection(dbpath):
     return json.loads(models_json), json.loads(decks_json), notes, rows
 
 
+def _read_tags(dbpath):
+    """nid -> étiquettes (texte séparé par des espaces). Vide si la colonne n'existe pas."""
+    con = sqlite3.connect(dbpath)
+    try:
+        return {nid: tags or "" for nid, tags in con.execute("select id, tags from notes")}
+    except sqlite3.Error:
+        return {}
+    finally:
+        con.close()
+
+
 class LazyMedia:
     """Médias du .apkg, extraits seulement quand une carte en a besoin."""
 
@@ -185,15 +197,41 @@ class Collection:
             except Exception:
                 mapping = {}
         self.media = LazyMedia(self._zf, mapping, self._tmp.name)
-        self.models, self.decks, self.notes, self._rows = _read_collection(
-            os.path.join(self._tmp.name, dbname))
+        dbpath = os.path.join(self._tmp.name, dbname)
+        self.models, self.decks, self.notes, self._rows = _read_collection(dbpath)
+        self.tags = _read_tags(dbpath)
 
     def deck_names(self):
         return sorted(d["name"] for d in self.decks.values())
 
-    def cards(self, deck=None, include_reversed=False, accent="#1a5fb4", limit=None):
-        """Liste de (items_recto, items_verso, nom_du_paquet)."""
-        out, seen = [], set()
+    def note_types(self):
+        """Types de notes utilisés : [{"name", "fields", "notes", "type"}], triés par nom."""
+        counts = {}
+        for mid, _ in self.notes.values():
+            counts[str(mid)] = counts.get(str(mid), 0) + 1
+        out = []
+        for mid, n in counts.items():
+            model = self.models.get(mid)
+            if model:
+                out.append({"name": model.get("name", mid), "notes": n,
+                            "fields": formats.field_names(model), "type": model.get("type", 0),
+                            "model": model})
+        return sorted(out, key=lambda m: m["name"].lower())
+
+    def cards(self, deck=None, include_reversed=False, accent="#1a5fb4", limit=None,
+              formats_book=None, theme=None, lang=None, model_name=None):
+        """Liste de (recto, verso, nom_du_paquet).
+
+        Recto et verso sont des listes d'éléments (rendu d'après les modèles Anki) ou des
+        `RichSide` (rendu d'après un format de note : voir formats.py). `model_name` ne garde
+        que les cartes de ce type de note (aperçu de l'éditeur de format)."""
+        from .cssstyle import Skin
+        from .richcard import RichSide
+
+        book = formats_book if formats_book is not None else formats.FormatBook()
+        lang = lang or get_language()
+        main = (theme or make_theme(DEFAULT_COLOR))["main"]
+        skins, out, seen = {}, [], set()
         for nid, did, odid, ord_ in self._rows:
             deck_name = self.decks.get(str(odid or did), {}).get("name", "")
             if deck and deck.lower() not in deck_name.lower():
@@ -204,16 +242,43 @@ class Collection:
             model = self.models.get(str(mid))
             if not model:
                 continue
+            if model_name is not None and model.get("name") != model_name:
+                continue
+            short = deck_name.split("::")[-1]
+            fmt = book.for_model(model)
+            if fmt is not None:
+                if model.get("type") != 1:  # un format décrit la note entière : une seule carte
+                    if nid in seen:         # (sauf les trous : un trou = une carte)
+                        continue
+                    seen.add(nid)
+                names = formats.field_names(model)
+                fields = {n: (flds[i] if i < len(flds) else "") for i, n in enumerate(names)}
+                key = (model.get("name"), fmt.get("css", True))
+                if key not in skins:
+                    skins[key] = (Skin.from_css(model.get("css", "")) if fmt.get("css", True)
+                                  else Skin.from_color(main))
+                cloze = (lambda rev: (ord_ + 1, rev)) if model.get("type") == 1 else None
+                tags = self.tags.get(nid, "")
+                sides = [RichSide(formats.resolve_side(
+                    fmt, side, fields, tags, short, lang,
+                    cloze=cloze(side == "back") if cloze else None), skins[key])
+                    for side in ("front", "back")]
+                if sides[0] or sides[1]:
+                    out.append((sides[0], sides[1], short))
+                    if limit and len(out) >= limit:
+                        break
+                continue
             if model.get("type") != 1 and not include_reversed:
                 if nid in seen:
                     continue
                 seen.add(nid)
-            sides = build_card_sides(model, flds, ord_)
+            sides = build_card_sides(model, flds, ord_, extra={
+                "Tags": self.tags.get(nid, ""), "Deck": short, "Subdeck": short})
             if not sides:
                 continue
             fi, bi = to_items(sides[0], accent), to_items(sides[1], accent)
             if fi or bi:
-                out.append((fi, bi, deck_name.split("::")[-1]))
+                out.append((fi, bi, short))
                 if limit and len(out) >= limit:
                     break
         return out
@@ -294,9 +359,11 @@ def render(tmpl, fields, front_side="", cloze_n=None, reveal=False):
     return re.sub(r"\{\{([^}]+)\}\}", sub, tmpl)
 
 
-def build_card_sides(model, flds, ord_):
+def build_card_sides(model, flds, ord_, extra=None):
     names = [f["name"] for f in sorted(model["flds"], key=lambda f: f["ord"])]
     fields = {n: (flds[i] if i < len(flds) else "") for i, n in enumerate(names)}
+    for key, value in (extra or {}).items():  # Tags, Deck… (champs spéciaux d'Anki)
+        fields.setdefault(key, value)
     is_cloze = model.get("type") == 1
     tmpls = model["tmpls"]
     t = tmpls[0] if is_cloze else (tmpls[ord_] if ord_ < len(tmpls) else None)
@@ -475,6 +542,8 @@ def _draw_card(c, x, y, w, h, items, side, deck, font, media, base_size, theme, 
     c.setFont(font, 7)
     c.drawRightString(x + w - 4 * mm, ty, name)
 
+    if hasattr(items, "draw"):  # côté décrit par un format (richcard.RichSide)
+        return items.draw(c, x, y, w, h - band, font, media, base_size)
     return _draw_content(c, items, x, y, w, h - band, font, media, base_size)
 
 
@@ -522,8 +591,10 @@ def _draw_sheet(c, chunk, side, page, m, cw, ch, cols, rows, mirror_cols, font, 
 
 def convert(apkg, output=None, cols=2, rows=4, margin=8.0, font_size=16.0,
             landscape=False, flip="long", deck=None, include_reversed=False,
-            color=DEFAULT_COLOR, lang=None, on_progress=None):
-    """Convertit `apkg` en PDF. `lang` : langue des libellés des cartes (défaut : langue courante). Renvoie un dict (output, cards, pages, overflow).
+            color=DEFAULT_COLOR, lang=None, formats=None, on_progress=None):
+    """Convertit `apkg` en PDF. `lang` : langue des libellés des cartes (défaut : langue courante).
+    `formats` : FormatBook (formats de notes) ; par défaut, seul le QCM est reconnu automatiquement.
+    Renvoie un dict (output, cards, pages, overflow).
 
     Une carte physique a deux faces : par défaut, on ne garde qu'une carte par note
     (hors cloze), ce qui évite les doublons des types « Basique (et carte inversée) ».
@@ -534,7 +605,8 @@ def convert(apkg, output=None, cols=2, rows=4, margin=8.0, font_size=16.0,
     page, m, cw, ch = _geometry(cols, rows, margin, landscape)
 
     with Collection(apkg) as col:
-        cards = col.cards(deck, include_reversed, theme["accent"])
+        cards = col.cards(deck, include_reversed, theme["accent"], formats_book=formats,
+                          theme=theme, lang=lang)
         if not cards:
             raise ApkgError("err.no_cards")
 
@@ -571,7 +643,7 @@ def card_labels(lang=None):
 
 def render_page_preview(col=None, deck=None, include_reversed=False, color=DEFAULT_COLOR,
                         cols=2, rows=4, margin=8.0, font_size=16.0, landscape=False,
-                        flip="long", lang=None):
+                        flip="long", lang=None, formats=None, model_name=None):
     """Dessine la première page telle qu'elle sera imprimée : recto puis verso en miroir.
 
     Utilise les premières cartes de `col` si fourni (sinon une carte d'exemple répétée).
@@ -586,7 +658,8 @@ def render_page_preview(col=None, deck=None, include_reversed=False, color=DEFAU
 
     cards, media = [], {}
     if col is not None:
-        cards = col.cards(deck, include_reversed, theme["accent"], limit=per)
+        cards = col.cards(deck, include_reversed, theme["accent"], limit=per,
+                          formats_book=formats, theme=theme, lang=lang, model_name=model_name)
         media = col.media
     sample = not cards
     if sample:
@@ -613,10 +686,10 @@ def render_page_preview(col=None, deck=None, include_reversed=False, color=DEFAU
 
 def render_preview(col=None, deck=None, include_reversed=False, color=DEFAULT_COLOR,
                    cols=2, rows=4, margin=8.0, font_size=16.0, landscape=False,
-                   background="#ffffff", lang=None):
+                   background="#ffffff", lang=None, formats=None, model_name=None, index=0):
     """Dessine une seule carte (recto + verso) à la taille réelle de la grille choisie.
 
-    Utilise la première carte de `col` si fourni, sinon une carte d'exemple.
+    Utilise la carte n° `index` (0 = première) de `col` si fourni, sinon une carte d'exemple.
     Renvoie {"pdf": bytes, "size_pt": (w, h), "card_mm": (w, h), "sample": bool}.
     """
     theme = make_theme(color)
@@ -627,9 +700,10 @@ def render_preview(col=None, deck=None, include_reversed=False, color=DEFAULT_CO
 
     card, media = None, {}
     if col is not None:
-        found = col.cards(deck, include_reversed, theme["accent"], limit=1)
+        found = col.cards(deck, include_reversed, theme["accent"], limit=index + 1,
+                          formats_book=formats, theme=theme, lang=lang, model_name=model_name)
         if found:
-            card, media = found[0], col.media
+            card, media = found[-1], col.media  # la n-ième carte, ou la dernière s'il y en a moins
     sample = card is None
     if sample:
         card = (to_items(t_in(lang, "sample.front"), theme["accent"]),

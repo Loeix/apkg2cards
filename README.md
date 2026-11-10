@@ -23,6 +23,8 @@ miroir pour tomber pile derrière leur recto.
 - Gras / italique / exposant, images, cartes inversées et cloze
   (trou `[...]` au recto, réponse en couleur et en gras au verso)
 - Une carte par note : les cartes inversées ne sont pas imprimées en double (option pour les inclure)
+- **QCM et formats de notes** : mise en page automatique des QCM (aux couleurs du CSS de la note)
+  et **éditeur de champs** pour n'importe quel type de note, avec aperçu en direct
 - Glisser-déposer d'un `.apkg` dans la fenêtre, filtre par paquet
 
 ## Installation
@@ -74,7 +76,31 @@ python -m apkg2cards mon_paquet.apkg --list-decks
 | `--with-reversed` | imprimer aussi les cartes inversées | non |
 | `--lang fr\|en` | langue des messages | celle du système |
 | `--card-lang fr\|en` | langue des libellés imprimés (QUESTION / ANSWER) | `--lang` |
+| `--formats FICHIER` | fichier de formats de notes (JSON) à la place de celui de l'interface | |
+| `--qcm-back answer\|highlight` | verso des QCM : bonne réponse + explication, ou QCM complet | `answer` |
 | `--list-decks` | liste les paquets et quitte | |
+
+## Formats de notes (QCM, champs personnalisés)
+
+Les types de notes Anki ne se ressemblent pas : un QCM a une question, des propositions A, B, C, D,
+une bonne réponse et une explication. apkg2cards sait les mettre en page à la place des modèles Anki.
+
+- **QCM reconnu automatiquement** : un type de note avec des champs `A`, `B`, `C`… (ou
+  `Option 1`, `Choix 1`…) et un champ « réponse » est dessiné avec une pastille d'étiquette, la
+  question, les propositions lettrées et l'explication, **aux couleurs du CSS de la note**
+  (variables `--accent`, `--ok`…, classes `.opt`, `.letter`, `.explain`…). La bonne réponse peut
+  être écrite `B`, `AC`, `A, C`, `A et C`, `2` ou être le texte d'une proposition.
+- **Deux versos au choix** : *bonne réponse + explication* (lisible sur de petites cartes) ou
+  *QCM complet*, toutes les propositions avec la bonne en surbrillance.
+- **Éditeur de formats** (bouton **Modifier les formats…**) : pour chaque type de note du paquet,
+  choisis les champs du recto et du verso, leur ordre, leur style (titre, texte, encadré
+  d'explication, pastille…), un intitulé, et vois le résultat en direct. Les mises en page sont
+  enregistrées par nom de type de note (`formats.json`, dans le dossier de réglages de
+  l'utilisateur) et réutilisées la fois suivante.
+- Les champs spéciaux `Tags` et `Deck` sont aussi disponibles dans les modèles Anki classiques.
+
+En ligne de commande, les formats enregistrés par l'interface sont utilisés ; `--formats fichier.json`
+en choisit un autre et `--qcm-back highlight` donne le QCM complet au verso.
 
 ## Export depuis Anki
 
@@ -136,8 +162,10 @@ toutes les clés et tous les paramètres `{...}` sont présents.
 
 ## Limites
 
-- Le rendu suit les templates du type de note (champs, conditions, cloze) mais ignore le CSS
-  d'Anki ; les images webp/svg ne sont pas gérées (affichées `[image]`).
+- Le rendu suit les templates du type de note (champs, conditions, cloze) mais ignore leur CSS
+  et leur JavaScript. Seuls les formats de notes (QCM reconnu, ou mise en page de l'éditeur)
+  reprennent les couleurs, tailles et arrondis du CSS (pas le mode nuit). Les images webp/svg
+  ne sont pas gérées (affichées `[image]`).
 - Le LaTeX / MathJax n'est pas rendu.
 - Les polices DejaVu (Linux) ou Arial (Windows/macOS) sont utilisées si présentes,
   sinon Helvetica (certains symboles peuvent manquer).

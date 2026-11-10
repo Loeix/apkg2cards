@@ -1,8 +1,10 @@
 """Interface en ligne de commande."""
 import argparse
+import json
 import sys
 
 from .core import DEFAULT_COLOR, ApkgError, convert, list_decks
+from .formats import FormatBook, load_book
 from .i18n import set_language, t
 
 
@@ -30,6 +32,13 @@ def main(argv=None):
                     help="langue des messages (défaut : celle du système)")
     ap.add_argument("--card-lang", choices=["fr", "en"],
                     help="langue des libellés imprimés sur les cartes (défaut : --lang)")
+    ap.add_argument("--formats", metavar="FICHIER",
+                    help="fichier de formats de notes (JSON) à utiliser à la place de celui "
+                         "enregistré par l'interface")
+    ap.add_argument("--qcm-back", choices=["answer", "highlight"], default="answer",
+                    help="verso des QCM reconnus automatiquement : « answer » = bonne réponse + "
+                         "explication (défaut), « highlight » = QCM complet, bonne réponse en "
+                         "surbrillance")
     ap.add_argument("--list-decks", action="store_true", help="liste les paquets et quitte")
     a = ap.parse_args(argv)
 
@@ -40,9 +49,20 @@ def main(argv=None):
         if a.list_decks:
             print("\n".join(list_decks(a.apkg)))
             return 0
+        back = "highlight" if a.qcm_back == "highlight" else "correct_only"
+        if a.formats:
+            try:
+                with open(a.formats, encoding="utf-8") as f:
+                    book = FormatBook.from_json(json.load(f), qcm_back=back)
+            except (OSError, ValueError):
+                print(t("cli.formats_missing", path=a.formats), file=sys.stderr)
+                return 1
+        else:
+            book = load_book(qcm_back=back)
         r = convert(a.apkg, a.output, a.cols, a.rows, a.margin, a.font_size,
                     a.landscape, a.flip, a.deck,
-                    include_reversed=a.with_reversed, color=a.color, lang=a.card_lang)
+                    include_reversed=a.with_reversed, color=a.color, lang=a.card_lang,
+                    formats=book)
     except ApkgError as e:
         print(t("cli.error", msg=e), file=sys.stderr)
         return 1

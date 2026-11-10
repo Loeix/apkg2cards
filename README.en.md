@@ -22,6 +22,8 @@ to be printed double-sided and cut out. Backs are mirrored so each one lands exa
 - Bold / italic / superscript, images, reversed cards and cloze deletions
   (`[...]` on the front, colored bold answer on the back)
 - One card per note: reversed cards are not printed twice (option to include them)
+- **Multiple-choice and note formats**: automatic layout of quiz cards (in the note's CSS colors)
+  and a **field editor** for any note type, with live preview
 - Drag and drop an `.apkg` into the window, deck filter
 
 ## Installation
@@ -73,7 +75,30 @@ python -m apkg2cards my_deck.apkg --list-decks
 | `--with-reversed` | also print reversed cards | no |
 | `--lang fr\|en` | message language | system language |
 | `--card-lang fr\|en` | language of the printed labels (QUESTION / ANSWER) | `--lang` |
+| `--formats FILE` | note-formats file (JSON) to use instead of the interface's | |
+| `--qcm-back answer\|highlight` | back of multiple-choice cards: correct answer + explanation, or full quiz | `answer` |
 | `--list-decks` | list decks and exit | |
+
+## Note formats (multiple choice, custom fields)
+
+Anki note types differ: a multiple-choice quiz has a question, options A, B, C, D, a correct
+answer and an explanation. apkg2cards can lay them out itself instead of using the Anki templates.
+
+- **Automatic multiple-choice detection**: a note type with fields `A`, `B`, `C`… (or
+  `Option 1`, `Choice 1`…) and an “answer” field is drawn with a tag pill, the question, lettered
+  options and the explanation, **in the colors of the note's CSS** (variables `--accent`, `--ok`…,
+  classes `.opt`, `.letter`, `.explain`…). The correct answer can be written `B`, `AC`, `A, C`,
+  `A and C`, `2`, or be the text of an option.
+- **Two back sides to choose from**: *correct answer + explanation* (readable on small cards) or
+  *full quiz*, every option with the correct one highlighted.
+- **Format editor** (**Edit formats…** button): for each note type in the deck, pick the front and
+  back fields, their order, their style (title, text, explanation box, pill…) and a heading, and
+  see the result live. Layouts are saved by note-type name (`formats.json`, in the user's settings
+  folder) and reused next time.
+- The special fields `Tags` and `Deck` are also available in regular Anki templates.
+
+On the command line, the formats saved by the interface are used; `--formats file.json` picks
+another file and `--qcm-back highlight` gives the full quiz on the back.
 
 ## Exporting from Anki
 
@@ -128,8 +153,10 @@ and every `{...}` placeholder is present.
 
 ## Limitations
 
-- Rendering follows the note type's templates (fields, conditionals, cloze) but ignores Anki's CSS;
-  webp/svg images are not supported (shown as `[image]`).
+- Rendering follows the note type's templates (fields, conditionals, cloze) but ignores their CSS
+  and JavaScript. Only note formats (a detected quiz, or a layout from the editor) take over the
+  CSS colors, sizes and corner radii (not night mode). webp/svg images are not supported
+  (shown as `[image]`).
 - LaTeX / MathJax is not rendered.
 - DejaVu (Linux) or Arial (Windows/macOS) fonts are used when available, otherwise Helvetica.
 - Automatic update: Windows only, installed app.

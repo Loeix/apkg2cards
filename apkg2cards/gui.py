@@ -18,6 +18,8 @@ from PySide6.QtWidgets import (QApplication, QBoxLayout, QButtonGroup, QCheckBox
 from . import __version__, updater
 from .core import (DEFAULT_COLOR, ApkgError, Collection, convert, render_page_preview,
                    render_preview)
+from .editor import FormatEditor
+from .formats import load_book
 from .i18n import LANGUAGES, detect_system_language, get_language, set_language, t
 from .updater import UpdateError
 
@@ -375,6 +377,7 @@ class MainWindow(QMainWindow):
         self._qt_tr = []
         self._status = ("status.start", {})
         self.collection = None
+        self.formats = load_book()  # formats de notes enregistrés (voir formats.py)
         self.apkg_path = ""
         self.last_pdf = None
         self.update_info = None
@@ -601,6 +604,14 @@ class MainWindow(QMainWindow):
 
         sl.addWidget(self._label("note.print", wrap=True))
 
+        # -- formats de notes (QCM, champs personnalisés)
+        fmt_panel, fl2 = self._panel("fmt.panel")
+        fl2.addWidget(self._label("fmt.panel_hint", wrap=True))
+        self.formats_btn = self._button("fmt.btn", self.open_formats)
+        self.formats_btn.setEnabled(False)
+        fl2.addWidget(self.formats_btn)
+        sl.addWidget(fmt_panel)
+
         # -- application : canal et mises à jour
         app_panel, al = self._panel("panel.app")
         al.addWidget(self._label("app.channel"))
@@ -781,6 +792,7 @@ class MainWindow(QMainWindow):
         if self.collection is not None:
             self.collection.close()
         self.collection = col
+        self.formats_btn.setEnabled(True)
         self.deck_box.blockSignals(True)
         self.deck_box.clear()
         self.deck_box.addItem(t("deck.all"))
@@ -788,6 +800,15 @@ class MainWindow(QMainWindow):
         self.deck_box.blockSignals(False)
         self.set_status("status.loaded")
         self.schedule_preview()
+
+    def open_formats(self):
+        """Éditeur de formats : disposition des champs de chaque type de note."""
+        if self.collection is None:
+            return
+        dlg = FormatEditor(self, self.collection, self.formats, self._opts(), CardView,
+                           background=THEMES[self.theme]["panel"])
+        if dlg.exec():
+            self.schedule_preview()
 
     def _collection_failed(self, msg):
         self.set_status("status.error", msg=msg)
@@ -803,7 +824,7 @@ class MainWindow(QMainWindow):
                     margin=float(self.margin.value()), font_size=float(self.font.value()),
                     landscape=self.landscape.isChecked(),
                     include_reversed=self.reversed.isChecked(), color=self.color,
-                    lang=self._card_lang())
+                    lang=self._card_lang(), formats=self.formats)
 
     def _deck(self):
         return None if self.deck_box.currentIndex() <= 0 else self.deck_box.currentText()
